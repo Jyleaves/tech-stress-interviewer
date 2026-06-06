@@ -1,13 +1,16 @@
 // app/api/transcribe/route.ts
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // 需在项目根目录新建 .env 文件并配置该变量
-  baseURL: process.env.OPENAI_BASE_URL, // 如果使用国内聚合代理，请配置 baseURL
+  apiKey: process.env.SILICONFLOW_API_KEY, 
+  baseURL: "https://api.siliconflow.cn/v1", 
 });
 
 export async function POST(req: Request) {
+  console.log("--- 新的 ASR 请求 ---");
+  console.log("【Env 检查】API Key:", process.env.SILICONFLOW_API_KEY ? (process.env.SILICONFLOW_API_KEY.substring(0, 8) + "***") : "未检测到");
+
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File;
@@ -16,11 +19,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "未检测到音频文件上传" }, { status: 400 });
     }
 
-    // 调用 OpenAI Whisper API 进行语音转文字
+    // 💡 重点修复：在 Node.js 后端，不能将浏览器的 File 实例直接丢给 openai 库。
+    // 我们需要先读成 ArrayBuffer -> 包装为 Node Buffer -> 用 toFile 转成规范的文件负载！
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const filePayload = await toFile(buffer, "answer.webm", { type: "audio/webm" });
+
+    // 💡 传入经过标准转换的文件负载 filePayload
     const transcription = await openai.audio.transcriptions.create({
-      file: file,
-      model: "whisper-1",
-      language: "zh", // 强制指定中文识别，提升准确率
+      file: filePayload,
+      model: "TeleAI/TeleSpeechASR", // 如果想要高准确率方言普通话选星辰，如果想要极致速度选阿里 "FunAudioLLM/SenseVoiceSmall"
     });
 
     return NextResponse.json({ text: transcription.text });

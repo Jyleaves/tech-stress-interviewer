@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Mic, Square, Terminal, AlertTriangle } from "lucide-react";
 
-// 🚀 导入刚才拆分出的四个全新前端组件
 import InterviewSetup from "./components/InterviewSetup";
 import CameraMonitor from "./components/CameraMonitor";
 import Timer from "./components/Timer";
@@ -34,6 +33,12 @@ export default function Home() {
 
   // 维护面试对话历史，供大模型追问和最后生成报告
   const [history, setHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+
+  // 🎙️ 麦克风录音控制引用
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const finalAudioBlobRef = useRef<Blob | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // 倒计时与高压计时逻辑
   useEffect(() => {
@@ -88,33 +93,92 @@ export default function Home() {
     setHistory([{ role: "assistant", content: currentQuestion }]);
   };
 
-  // 核心：点击提交作答时，通过 prompt 弹窗获取文本回答，并连线 DeepSeek 深度追问
+  // 核心闭环：结束录音 -> 语音转文字(ASR) -> 大模型追问(LLM) -> 语音合成朗读(TTS)
   const handleNextQuestion = async () => {
-    // 1. 弹出浏览器原生输入框，方便临时文本测试
-    const userInput = window.prompt(
-      "【大厂技术面作答通道】\n请在下方输入你的技术回答进行测试：",
-      "针对这个问题，我认为应当使用双检锁（Double-Checked Locking）配合 volatile 关键字来防止..."
-    );
-
-    // 如果用户点击了取消，或者输入为空，则中止
-    if (userInput === null || userInput.trim() === "") {
+    console.log("【Trigger】handleNextQuestion 开始执行。当前 isRecording 状态：", isRecording);
+    
+    let audioBlob: Blob | null = null;
+    const recorder = mediaRecorderRef.current;
+    
+    if (isRecording && recorder) {
+      // 通道一：点击提交时依然处于录音状态（习惯一），自动收尾并提取音频
+      try {
+        console.log("【ASR】检测到仍在录制中，开始执行自动收尾。");
+        audioBlob = await new Promise<Blob>((resolve, reject) => {
+          recorder.onstop = () => {
+            try {
+              const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+              if (audioStreamRef.current) {
+                audioStreamRef.current.getTracks().forEach(track => track.stop());
+                audioStreamRef.current = null;
+              }
+              resolve(blob);
+            } catch (err) {
+              reject(err);
+            }
+          };
+          recorder.stop();
+        });
+      } catch (err) {
+        console.error("【ASR Error】自动收尾时提取音频故障：", err);
+      }
+      setIsRecording(false);
+    } else if (finalAudioBlobRef.current) {
+      // 通道二：点击提交前用户已经手动点击了暂停（习惯二），直接从暂存区提取音频
+      audioBlob = finalAudioBlobRef.current;
+      finalAudioBlobRef.current = null; // 消费后清空
+      console.log("【ASR】成功从暂存区读取手动结束的音频文件。大小：", audioBlob.size);
+    } else {
+      // 如果两个通道都为空，说明用户根本没说录过音
+      console.warn("【ASR Warn】未检测到任何处于激活态或暂存态的录音数据。");
+      alert("请先开启麦克风，或点击开始作答后再进行提交！(若热重载导致丢失状态，请刷新页面重新开始)");
       return;
     }
 
-    // 2. 暂时关闭录音状态，更新考场反馈信息
-    setIsRecording(false);
-    setActionHint("面试官正在审视你的回答，并连线 DeepSeek 整理下一轮技术追问...");
+    if (!audioBlob || audioBlob.size === 0) {
+      alert("音频数据采集为空，请重新尝试作答。");
+      return;
+    }
 
-    // 3. 将用户的回答追加到对话历史中
-    const updatedHistory = [
-      ...history,
-      { role: "user" as const, content: userInput }
-    ];
-    setHistory(updatedHistory);
+    setActionHint("正在对你的作答语音进行高精度声学建模分析 (ASR)...");
 
     try {
-      // 4. 发送 POST 请求调用我们之前写好的 /api/chat 接口
-      const response = await fetch("/api/chat", {
+      const formData = new FormData();
+      formData.append("file", audioBlob, "answer.webm");
+
+      console.log("【ASR】正在投递 FormData 音频至 /api/transcribe...");
+      const transcribeResponse = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!transcribeResponse.ok) {
+        throw new Error("语音转文字接口服务异常");
+      }
+
+      const transcribeData = await transcribeResponse.json();
+      const userText = transcribeData.text;
+
+      if (!userText || userText.trim() === "") {
+        setActionHint("【错误】未侦测到有效的作答声音，请大声、清晰地重新开始作答。");
+        return;
+      }
+
+      console.log("🎤 ASR 识别出的作答文本: ", userText);
+      
+      // 💡 弹窗提醒，看你刚才说的到底准不准（检测到准确后可注释掉）
+      window.alert(`【ASR 识别成功】\n您刚才说的是：\n\n"${userText}"`);
+
+      setActionHint(`语音识别成功：\"${userText}\"，面试官正在用 DeepSeek 解析你的底层逻辑漏洞...`);
+
+      const updatedHistory = [
+        ...history,
+        { role: "user" as const, content: userText }
+      ];
+      setHistory(updatedHistory);
+
+      console.log("【LLM】正在向 DeepSeek-V4-Flash 投递上下文...");
+      const chatResponse = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -128,62 +192,103 @@ export default function Home() {
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("大模型接口响应异常");
+      if (!chatResponse.ok) {
+        throw new Error("大模型追问接口异常");
       }
 
-      const data = await response.json();
+      const chatData = await chatResponse.json();
+      setCurrentQuestion(chatData.question);
 
-      if (data.error) {
-        alert("大模型返回错误: " + data.error);
-        return;
-      }
-
-      // 5. 成功拿到 DeepSeek 追问，更新界面状态
-      setCurrentQuestion(data.question);
-
-      // 💡 自动朗读面试官的追问：请求我们的后端接口并播放
-      setActionHint("面试官正在组织语言，口头向你提出深入追问...");
-      try {
-        const ttsResponse = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: data.question }),
-        });
-        if (ttsResponse.ok) {
-          const audioBlob = await ttsResponse.blob();
-          const audioUrl = URL.createObjectURL(audioBlob);
-          const audio = new Audio(audioUrl);
-          audio.play(); // 自动开口说话！
-        }
-      } catch (ttsErr) {
-        console.warn("TTS 自动播放失败: ", ttsErr);
-      }
-      
-      // 6. 将大模型的追问也追加到历史中，以便下一次迭代
       setHistory([
         ...updatedHistory,
-        { role: "assistant" as const, content: data.question }
+        { role: "assistant" as const, content: chatData.question }
       ]);
 
       setQuestionCount((c) => c + 1);
       setTimeRemaining(120);
+
+      // 💡 自动朗读面试官的追问
+      try {
+        setActionHint("面试官正在组织语言，口头向你提出深入追问...");
+        console.log("【TTS】正在向后端请求语音合成...");
+        const ttsResponse = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: chatData.question }),
+        });
+        if (ttsResponse.ok) {
+          const ttsBlob = await ttsResponse.blob();
+          const audioUrl = URL.createObjectURL(ttsBlob);
+          const audio = new Audio(audioUrl);
+          audio.play(); 
+          console.log("【TTS】开始自动播音。");
+        }
+      } catch (ttsErr) {
+        console.warn("TTS 自动播放失败: ", ttsErr);
+      }
+
       setActionHint("面试官对你的上一个回答表示怀疑，正在进行深度追问...");
 
     } catch (error) {
-      console.error("联调失败: ", error);
-      setActionHint("通信异常：无法连线到面试官大脑，请检查网络或 .env 秘钥配置。");
-      alert("对话失败，请确认你的 .env.local 中配置了 DEEPSEEK_API_KEY，且后端 npm run dev 终端无报错。");
+      console.error("【ERROR】完整的语音环路联调失败: ", error);
+      setActionHint("通信异常：无法连线到面试官，请检查后端服务日志或 .env 配置。");
     }
   };
 
-  // 模拟作答录制
-  const toggleRecording = () => {
-    setIsRecording(!isRecording);
+  // 录音开关：开始录音或结束录音
+  const toggleRecording = async () => {
+    console.log("【Trigger】toggleRecording 点击触发。当前 isRecording 状态：", isRecording);
+    
     if (!isRecording) {
-      setActionHint("正在录音并分析你的答题结构（建议遵循 STAR 原则：情境-任务-行动-结果）...");
+      // 1. 开始录音
+      try {
+        audioChunksRef.current = []; 
+        
+        console.log("【Mic】正在申请麦克风硬件权限...");
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioStreamRef.current = audioStream; // 💡 隔离保存音轨流
+        
+        const mediaRecorder = new MediaRecorder(audioStream);
+        mediaRecorderRef.current = mediaRecorder;
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.start();
+        setIsRecording(true);
+        setActionHint("【麦克风已开启】正在倾听并录制你的技术作答。作答结束后，请点击下方“结束作答并提交”...");
+        console.log("【Mic】录音启动成功。");
+      } catch (err) {
+        console.error("【Mic Error】无法获取麦克风权限或初始化失败: ", err);
+        alert("无法开启麦克风，请检查浏览器是否已授权麦克风访问权限。");
+      }
     } else {
-      setActionHint("作答已暂时挂起，请检查或直接提交。");
+      // 2. 停止录音（如果用户手动点击暂停）
+      try {
+        console.log("【Mic】手动停止录制...");
+        const recorder = mediaRecorderRef.current; 
+        if (recorder && recorder.state !== "inactive") {
+          // 💡 重点：绑定 onstop 回调，在手动暂停时将音频保存到缓存引用中
+          recorder.onstop = () => {
+            finalAudioBlobRef.current = new Blob(audioChunksRef.current, { type: "audio/webm" });
+            console.log("【Mic】手动录音文件已成功封包并暂存。大小：", finalAudioBlobRef.current.size);
+          };
+          recorder.stop();
+        }
+        // 释放麦克风硬件
+        if (audioStreamRef.current) {
+          audioStreamRef.current.getTracks().forEach(track => track.stop());
+          audioStreamRef.current = null;
+        }
+        console.log("【Mic】音轨流和麦克风硬件成功释放。");
+      } catch (err) {
+        console.error("【Mic Error】停止录音硬件释放时捕获非阻断异常：", err);
+      }
+      setIsRecording(false);
+      setActionHint("作答已暂时挂起，你可以重新开启麦克风，或直接点击右侧提交。");
     }
   };
 
@@ -207,6 +312,8 @@ export default function Home() {
     setSatisfaction(85);
     setActionHint("面试官正在凝视你，请点击下方按钮开始作答...");
     setIsRecording(false);
+    
+    finalAudioBlobRef.current = null;
   };
 
   return (
