@@ -1,74 +1,94 @@
+// app/components/ReportCard.tsx
 "use client";
 
 import React from "react";
-import { Award, BarChart2, CornerDownRight, Flame, RefreshCw } from "lucide-react";
+import { Award, BarChart2, CornerDownRight, Flame, RefreshCw, Loader2 } from "lucide-react";
 
 interface ReportCardProps {
   jobTitle: string;
   stressLevel: string;
+  reportData: {
+    score: number;
+    depthAnalysis: string;
+    structureAnalysis: string;
+    stressAnalysis: string;
+  } | null;
+  isLoading: boolean;
   onReset: () => void;
 }
 
-export default function ReportCard({ jobTitle, stressLevel, onReset }: ReportCardProps) {
+export default function ReportCard({ jobTitle, stressLevel, reportData, isLoading, onReset }: ReportCardProps) {
+  // 如果大模型正在解析、生成报告，显示加载骨架屏
+  if (isLoading) {
+    return (
+      <div className="max-w-3xl mx-auto w-full bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center shadow-2xl flex flex-col items-center justify-center min-h-[400px]">
+        <Loader2 className="animate-spin text-zinc-400 mb-4" size={32} />
+        <h2 className="text-sm font-bold text-zinc-200">AI 正在深度解析您的面试表现...</h2>
+        <p className="text-[11px] text-zinc-500 mt-2">请稍候，我们正在基于面试上下文评估您的技术深度、逻辑表达和抗压自信度。</p>
+      </div>
+    );
+  }
+
+  // 兜底默认值 (如果报告未成功获取)
+  const data = reportData || {
+    score: 60,
+    depthAnalysis: "暂无提取结果，可能是因面试中对话轮数太少，未收集到有效作答技术方案。",
+    structureAnalysis: "未能在历史记录中提取出符合 STAR 表达逻辑的主体陈述。",
+    stressAnalysis: "由于面试被提前打断，暂无在极端高压场景下的反应诊断。"
+  };
+
   return (
     <div className="max-w-3xl mx-auto w-full bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-2xl relative">
       <div className="flex justify-between items-start mb-8 border-b border-zinc-800/50 pb-6">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2 text-zinc-100">
-            <Award className="text-zinc-400" />
-            大厂技术评估复盘报告
+          <h1 className="text-xl font-bold flex items-center gap-2 text-zinc-100">
+            <Award className="text-zinc-400 animate-pulse" size={20} />
+            智能模拟面试复盘报告
           </h1>
           <p className="text-xs text-zinc-500 mt-1">
-            岗位：{jobTitle} ｜ 压力：{stressLevel === "hell" ? "地狱压力" : "标准考核"}
+            测评岗位：{jobTitle} ｜ 面试压力：{stressLevel === "hell" ? "压力测试模式" : "常规仿真模式"}
           </p>
         </div>
         <div className="bg-zinc-950 px-4 py-2 border border-zinc-800 rounded text-center">
-          <span className="block text-[9px] text-zinc-500 font-bold uppercase tracking-wider">技术综合匹配度</span>
-          <span className="text-3xl font-extrabold text-zinc-200">59%</span>
+          <span className="block text-[9px] text-zinc-500 font-bold uppercase tracking-wider">综合推荐匹配度</span>
+          <span className={`text-2xl font-extrabold ${data.score >= 80 ? "text-emerald-500" : data.score >= 60 ? "text-amber-500" : "text-red-500"}`}>
+            {data.score}%
+          </span>
         </div>
       </div>
 
-      {/* 三大维度分析 */}
+      {/* 评估主卡片 */}
       <div className="space-y-6">
         {/* 维度 1 */}
         <div className="bg-zinc-950/50 p-5 rounded-lg border border-zinc-800">
-          <div className="flex justify-between items-center mb-3">
-            <div className="flex items-center gap-2 text-xs font-bold text-zinc-300 uppercase tracking-wider">
-              <BarChart2 size={14} className="text-red-500" />
-              1. 技术深度与底层刨析 (Depth of Knowledge)
-            </div>
-            <span className="text-xs text-red-500 font-bold">及格线边缘 (D+)</span>
+          <div className="flex items-center gap-2 text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+            <BarChart2 size={14} className="text-zinc-400" />
+            1. 技术深度与底层原理 (Depth of Knowledge)
           </div>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            在回答 Redis 双检锁实现时，只背诵了基本概念。当面试官深度追问 JVM 锁升级细节时，表述含糊，未能分析出多级线程在多核 CPU 中的争抢瓶颈。大厂极其看重对分布式细节和极端并发情况下的兜底设计。
+          <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap">
+            {data.depthAnalysis}
           </p>
         </div>
 
         {/* 维度 2 */}
         <div className="bg-zinc-950/50 p-5 rounded-lg border border-zinc-800">
-          <div className="flex justify-between items-center mb-3">
-            <div className="flex items-center gap-2 text-xs font-bold text-zinc-300 uppercase tracking-wider">
-              <CornerDownRight size={14} className="text-amber-500" />
-              2. STAR结构化表达 (Structured Delivery)
-            </div>
-            <span className="text-xs text-amber-500 font-bold">待提升 (C)</span>
+          <div className="flex items-center gap-2 text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+            <CornerDownRight size={14} className="text-zinc-400" />
+            2. STAR结构化表达 (Structured Delivery)
           </div>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            有严重的倾听和跑题倾向。在追问 MySQL 强一致性策略时，回答绕回到缓存层面。未能做到“结论先行”，每句话中带有较多“大概、差不多”等非自信修饰词，极易在团队高负荷沟通中产生高昂成本。
+          <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap">
+            {data.structureAnalysis}
           </p>
         </div>
 
         {/* 维度 3 */}
         <div className="bg-zinc-950/50 p-5 rounded-lg border border-zinc-800">
-          <div className="flex justify-between items-center mb-3">
-            <div className="flex items-center gap-2 text-xs font-bold text-zinc-300 uppercase tracking-wider">
-              <Flame size={14} className="text-zinc-400" />
-              3. 极限抗压表现 (Stress Tolerance)
-            </div>
-            <span className="text-xs text-zinc-300 font-bold">符合大厂基本盘 (B)</span>
+          <div className="flex items-center gap-2 text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">
+            <Flame size={14} className="text-zinc-400" />
+            3. 抗压表现与情绪调整 (Stress Tolerance)
           </div>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            当计时器进入红闪预警、面试官耐心值大幅度下降时，你能基本稳住语速，没有出现大规模语塞，体现了较好的现场自我调整心态。但眼神在思考时容易向上方瞟，后续需要克制这一肢体小动作。
+          <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap">
+            {data.stressAnalysis}
           </p>
         </div>
       </div>
@@ -80,14 +100,7 @@ export default function ReportCard({ jobTitle, stressLevel, onReset }: ReportCar
           onClick={onReset}
           className="flex-1 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-bold py-3 rounded-lg text-xs tracking-wider uppercase transition flex items-center justify-center gap-2"
         >
-          <RefreshCw size={12} /> 重新匹配调整配置
-        </button>
-        <button
-          type="button"
-          onClick={() => alert("功能开发中，可在 Product Memo 中体现为下一步研发计划...")}
-          className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold py-3 rounded-lg text-xs tracking-wider uppercase transition"
-        >
-          导出 PDF 战绩到简历
+          <RefreshCw size={12} /> 重新开始新对练
         </button>
       </div>
     </div>

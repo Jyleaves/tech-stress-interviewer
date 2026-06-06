@@ -1,3 +1,4 @@
+// app/components/CameraMonitor.tsx
 "use client";
 
 import React, { useEffect } from "react";
@@ -68,7 +69,7 @@ export default function CameraMonitor({ stream, videoRef, isRecording }: CameraM
       )}
 
       <div className="bg-zinc-950 p-4 border-t border-zinc-800/50 text-[10px] text-zinc-600 leading-relaxed">
-        大厂面试官提示：请维持目光直视，避免眨眼过频或视线游离，后台正在根据心理模型判定你的抗压自信度。
+        仪态提示：请保持坐姿端正，平视摄像头，有助于在视频对练中展现自信与专注。
       </div>
     </div>
   );

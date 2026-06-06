@@ -1,3 +1,4 @@
+// app/page.tsx
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
@@ -16,6 +17,11 @@ export default function Home() {
   const [jobTitle, setJobTitle] = useState("字节跳动 - 核心业务线后端开发 (一面)");
   const [stressLevel, setStressLevel] = useState("hell"); // normal | hell
   const [resumeText, setResumeText] = useState("");
+
+  // 用来控制在面试中是否开启视/音采集与展示
+  const [useCamera, setUseCamera] = useState<boolean>(true);
+  const [useMic, setUseMic] = useState<boolean>(true);
+  const [typedAnswer, setTypedAnswer] = useState<string>(""); // 文本模式下的打字回答内容
   
   // 面试运行状态
   const [currentQuestion, setCurrentQuestion] = useState(
@@ -26,7 +32,18 @@ export default function Home() {
   const [timeRemaining, setTimeRemaining] = useState(120); // 单题 120 秒倒计时
   const [isTimerActive, setIsTimerActive] = useState(false);
   const [satisfaction, setSatisfaction] = useState(85); // 面试官耐心值 (0-100)
-  const [actionHint, setActionHint] = useState("面试官正在凝视你，请点击下方按钮开始作答...");
+  const [actionHint, setActionHint] = useState("系统准备就绪。请您梳理答题思路，点击下方按钮开始录音作答。");
+
+  // 用于接收并保存 AI 生成的复盘报告
+  const [reportData, setReportData] = useState<{
+    score: number;
+    depthAnalysis: string;
+    structureAnalysis: string;
+    stressAnalysis: string;
+  } | null>(null);
+  
+  // 生成报告时的加载等待状态
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
   // 摄像头流控制
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -35,11 +52,35 @@ export default function Home() {
   // 维护面试对话历史，供大模型追问和最后生成报告
   const [history, setHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
 
-  // 🎙️ 麦克风录音控制引用
+  // 麦克风录音控制引用
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const finalAudioBlobRef = useRef<Blob | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // 存储多个已解析的文件：包含文件名和解析出的具体内容
+  const [uploadedFiles, setUploadedFiles] = useState<{ name: string; content: string }[]>([]);
+
+  // 辅助函数：安全地停止当前正在播放的所有面试官语音，并清空引用
+  const stopActiveAudio = () => {
+    if (activeAudioRef.current) {
+      try {
+        activeAudioRef.current.pause();
+        activeAudioRef.current.currentTime = 0; // 重置进度
+      } catch (e) {
+        console.warn("停止语音播放时发生非阻断异常:", e);
+      }
+      activeAudioRef.current = null;
+    }
+  };
+
+  // 组件卸载时强制静音，防止页面关闭或切走后后台依然在播音的内存泄漏
+  useEffect(() => {
+    return () => {
+      stopActiveAudio();
+    };
+  }, []);
 
   // 倒计时与高压计时逻辑
   useEffect(() => {
@@ -80,10 +121,12 @@ export default function Home() {
     }
   };
 
-  // 🎙️ 统一封装：请求 TTS 语音合成并播放，播放完毕后再启动考场倒计时 (UX 终极优化)
+  // TTS 语音播放逻辑
   const speakQuestion = async (text: string) => {
     try {
-      setIsTimerActive(false); // 💡 提问开始，暂停考场倒计时
+      stopActiveAudio();
+
+      setIsTimerActive(false); // 提问开始，暂停考场倒计时
       setActionHint("面试官正在对你进行技术发问，请认真倾听，梳理答题思路...");
       
       console.log("【TTS】正在向后端请求语音合成...");
@@ -97,18 +140,21 @@ export default function Home() {
         const ttsBlob = await ttsResponse.blob();
         const audioUrl = URL.createObjectURL(ttsBlob);
         const audio = new Audio(audioUrl);
-        
-        // 💡 监听音频播放结束事件！
+        activeAudioRef.current = audio;
         audio.onended = () => {
           console.log("【TTS】播音结束。考场倒计时正式启动。");
-          setIsTimerActive(true); // 💡 面试官读完题，倒计时正式启动！
-          setActionHint("【考场提示】倒计时已开启！请点击下方“开启麦克风作答”开始陈述你的技术方案...");
+          setIsTimerActive(true);
+          // 根据用户是否开启麦克风，显示不同的提示词
+          if (useMic) {
+            setActionHint("【语音模式】倒计时已开启！请点击下方“开启麦克风作答”开始陈述您的方案...");
+          } else {
+            setActionHint("【打字模式】倒计时已开启！请在输入框内键入您的技术解答并提交...");
+          }
         };
 
         audio.play(); 
         console.log("【TTS】开始自动播音。");
       } else {
-        // 如果 TTS 故障，作为兜底也开启倒计时
         setIsTimerActive(true);
       }
     } catch (ttsErr) {
@@ -117,121 +163,143 @@ export default function Home() {
     }
   };
 
+  // 将文本框补充内容与多个上传的文件内容拼接，以便统一传给大模型
+  const getFormattedResumeAndFiles = () => {
+    let result = "";
+    if (resumeText.trim()) {
+      result += `候选人补充的项目说明或文字背景：\n${resumeText.trim()}\n\n`;
+    }
+    if (uploadedFiles.length > 0) {
+      result += `候选人上传的文件与简历清单：\n`;
+      uploadedFiles.forEach((file, index) => {
+        result += `--- 文件 [${index + 1}]: ${file.name} ---\n【内容】：\n${file.content}\n\n`;
+      });
+    }
+    return result || "未提供简历，按大厂标准考察通用计算机与系统设计能力";
+  };
+
   // 进入面试
-  const handleStartInterview = () => {
+  const handleStartInterview = (cameraPref: boolean, micPref: boolean) => {
+    setUseCamera(cameraPref);
+    setUseMic(micPref);
     setStep("interview");
-    startCamera();
+    setTypedAnswer(""); // 清空临时打字区
+
+    if (cameraPref) {
+      startCamera(); // 只有用户勾选了摄像头，才请求开启
+    }
+
     setTimeRemaining(120);
     setSatisfaction(stressLevel === "hell" ? 90 : 80);
     setQuestionCount(1);
     setHistory([{ role: "assistant", content: currentQuestion }]);
 
-    // 自动口头提问第一道默认技术题，读完后再开始倒计时
+    // 口头播放题目
     speakQuestion(currentQuestion);
   };
 
-  // 核心闭环：结束录音 -> 语音转文字(ASR) -> 大模型追问(LLM) -> 语音合成朗读(TTS)
+  // 核心闭环：结束录音/直接读取打字内容 -> 语音转文字(ASR) -> 大模型追问(LLM) -> 语音合成(TTS)
   const handleNextQuestion = async () => {
-    console.log("【Trigger】handleNextQuestion 开始执行。当前 isRecording 状态：", isRecording);
-    
-    let audioBlob: Blob | null = null;
-    const recorder = mediaRecorderRef.current;
-    
-    if (isRecording && recorder) {
-      // 通道一：点击提交时依然处于录音状态（习惯一），自动收尾并提取音频
-      try {
-        console.log("【ASR】检测到仍在录制中，开始执行自动收尾。");
-        audioBlob = await new Promise<Blob>((resolve, reject) => {
-          recorder.onstop = () => {
-            try {
-              const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-              if (audioStreamRef.current) {
-                audioStreamRef.current.getTracks().forEach(track => track.stop());
-                audioStreamRef.current = null;
+    let userText = "";
+
+    // 💡 场景一：开启了麦克风（语音采集流程）
+    if (useMic) {
+      console.log("【Trigger】handleNextQuestion (语音模式). 当前 isRecording：", isRecording);
+      let audioBlob: Blob | null = null;
+      const recorder = mediaRecorderRef.current;
+      
+      if (isRecording && recorder) {
+        try {
+          audioBlob = await new Promise<Blob>((resolve, reject) => {
+            recorder.onstop = () => {
+              try {
+                const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+                if (audioStreamRef.current) {
+                  audioStreamRef.current.getTracks().forEach(track => track.stop());
+                  audioStreamRef.current = null;
+                }
+                resolve(blob);
+              } catch (err) {
+                reject(err);
               }
-              resolve(blob);
-            } catch (err) {
-              reject(err);
-            }
-          };
-          recorder.stop();
-        });
-      } catch (err) {
-        console.error("【ASR Error】自动收尾时提取音频故障：", err);
-      }
-      setIsRecording(false);
-    } else if (finalAudioBlobRef.current) {
-      // 通道二：点击提交前用户已经手动点击了暂停（习惯二），直接从暂存区提取音频
-      audioBlob = finalAudioBlobRef.current;
-      finalAudioBlobRef.current = null; // 消费后清空
-      console.log("【ASR】成功从暂存区读取手动结束的音频文件。大小：", audioBlob.size);
-    } else {
-      // 如果两个通道都为空，说明用户根本没说录过音
-      console.warn("【ASR Warn】未检测到任何处于激活态或暂存态的录音数据。");
-      alert("请先开启麦克风，或点击开始作答后再进行提交！(若热重载导致丢失状态，请刷新页面重新开始)");
-      return;
-    }
-
-    if (!audioBlob || audioBlob.size === 0) {
-      alert("音频数据采集为空，请重新尝试作答。");
-      return;
-    }
-
-    setActionHint("正在对你的作答语音进行高精度声学建模分析 (ASR)...");
-
-    try {
-      const formData = new FormData();
-      formData.append("file", audioBlob, "answer.webm");
-
-      console.log("【ASR】正在投递 FormData 音频至 /api/transcribe...");
-      const transcribeResponse = await fetch("/api/transcribe", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!transcribeResponse.ok) {
-        throw new Error("语音转文字接口服务异常");
-      }
-
-      const transcribeData = await transcribeResponse.json();
-      const userText = transcribeData.text;
-
-      if (!userText || userText.trim() === "") {
-        setActionHint("【错误】未侦测到有效的作答声音，请大声、清晰地重新开始作答。");
+            };
+            recorder.stop();
+          });
+        } catch (err) {
+          console.error("【ASR】音频提取故障：", err);
+        }
+        setIsRecording(false);
+      } else if (finalAudioBlobRef.current) {
+        audioBlob = finalAudioBlobRef.current;
+        finalAudioBlobRef.current = null;
+      } else {
+        alert("请先开启麦克风，或开始说话后再点击提交！");
         return;
       }
 
-      console.log("🎤 ASR 识别出的作答文本: ", userText);
-      
-      // 弹窗提醒，看你刚才说的到底准不准（检测到准确后可注释掉）
-      // window.alert(`【ASR 识别成功】\n您刚才说的是：\n\n"${userText}"`);
+      if (!audioBlob || audioBlob.size === 0) {
+        alert("未采集到有效的录音，请重新尝试。");
+        return;
+      }
 
-      setActionHint(`语音识别成功：\"${userText}\"，面试官正在用 DeepSeek 解析你的底层逻辑漏洞...`);
+      setActionHint("正在对您的录音进行高精度声学分析 (ASR)...");
 
+      try {
+        const formData = new FormData();
+        formData.append("file", audioBlob, "answer.webm");
+        const transcribeResponse = await fetch("/api/transcribe", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!transcribeResponse.ok) throw new Error("语音识别服务异常");
+        const transcribeData = await transcribeResponse.json();
+        userText = transcribeData.text;
+
+        if (!userText || userText.trim() === "") {
+          setActionHint("【错误】未侦测到清晰的声音，请大声、清晰地再次重试。");
+          return;
+        }
+      } catch (err) {
+        console.error("ASR Error: ", err);
+        setActionHint("语音识别通信异常，请重试或检查后台配置。");
+        return;
+      }
+    } 
+    // 💡 场景二：关闭了麦克风（无障碍键盘打字作答流程）
+    else {
+      console.log("【Trigger】handleNextQuestion (文本模式).");
+      if (!typedAnswer.trim()) {
+        alert("回答内容不能为空，请先在下方输入框中键入您的技术解答方案。");
+        return;
+      }
+      userText = typedAnswer;
+      setTypedAnswer(""); // 提交后清空打字框
+    }
+
+    // 统一将获取到的文本投递给 DeepSeek
+    setActionHint(`已接收您的解答，面试官正在使用 DeepSeek 研判您的底层逻辑...`);
+
+    try {
       const updatedHistory = [
         ...history,
         { role: "user" as const, content: userText }
       ];
       setHistory(updatedHistory);
 
-      console.log("【LLM】正在向 DeepSeek-V4-Flash 投递上下文...");
       const chatResponse = await fetch("/api/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           history: updatedHistory,
           jobTitle: jobTitle,
           stressLevel: stressLevel,
-          resumeText: resumeText,
+          resumeText: getFormattedResumeAndFiles(),
           isFinish: false
         }),
       });
 
-      if (!chatResponse.ok) {
-        throw new Error("大模型追问接口异常");
-      }
+      if (!chatResponse.ok) throw new Error("大模型追问服务异常");
 
       const chatData = await chatResponse.json();
       setCurrentQuestion(chatData.question);
@@ -244,26 +312,21 @@ export default function Home() {
       setQuestionCount((c) => c + 1);
       setTimeRemaining(120);
 
-      // 呼叫统一封装的语音播放函数，读完之后再重设计时器！
+      // 调用 TTS 播放
       await speakQuestion(chatData.question);
     } catch (error) {
-      console.error("【ERROR】完整的语音环路联调失败: ", error);
-      setActionHint("通信异常：无法连线到面试官，请检查后端服务日志或 .env 配置。");
+      console.error("【ERROR】面试闭环联调失败: ", error);
+      setActionHint("大模型通信异常，请检查接口密钥或网络。");
     }
   };
 
-  // 录音开关：开始录音或结束录音
+  // 麦克风录音控制
   const toggleRecording = async () => {
-    console.log("【Trigger】toggleRecording 点击触发。当前 isRecording 状态：", isRecording);
-    
     if (!isRecording) {
-      // 1. 开始录音
       try {
         audioChunksRef.current = []; 
-        
-        console.log("【Mic】正在申请麦克风硬件权限...");
         const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioStreamRef.current = audioStream; // 隔离保存音轨流
+        audioStreamRef.current = audioStream;
         
         const mediaRecorder = new MediaRecorder(audioStream);
         mediaRecorderRef.current = mediaRecorder;
@@ -276,43 +339,64 @@ export default function Home() {
 
         mediaRecorder.start();
         setIsRecording(true);
-        setActionHint("【麦克风已开启】正在倾听并录制你的技术作答。作答结束后，请点击下方“结束作答并提交”...");
-        console.log("【Mic】录音启动成功。");
+        setActionHint("【麦克风已开启】正在倾听您的陈述。完成后，请点击下方“提交当前回答并深入追问”...");
       } catch (err) {
-        console.error("【Mic Error】无法获取麦克风权限或初始化失败: ", err);
-        alert("无法开启麦克风，请检查浏览器是否已授权麦克风访问权限。");
+        alert("麦克风权限受限，请在浏览器中开启授权。");
       }
     } else {
-      // 2. 停止录音（如果用户手动点击暂停）
       try {
-        console.log("【Mic】手动停止录制...");
         const recorder = mediaRecorderRef.current; 
         if (recorder && recorder.state !== "inactive") {
-          // 绑定 onstop 回调，在手动暂停时将音频保存到缓存引用中
           recorder.onstop = () => {
             finalAudioBlobRef.current = new Blob(audioChunksRef.current, { type: "audio/webm" });
-            console.log("【Mic】手动录音文件已成功封包并暂存。大小：", finalAudioBlobRef.current.size);
           };
           recorder.stop();
         }
-        // 释放麦克风硬件
         if (audioStreamRef.current) {
           audioStreamRef.current.getTracks().forEach(track => track.stop());
           audioStreamRef.current = null;
         }
-        console.log("【Mic】音轨流和麦克风硬件成功释放。");
       } catch (err) {
-        console.error("【Mic Error】停止录音硬件释放时捕获非阻断异常：", err);
+        console.error(err);
       }
       setIsRecording(false);
-      setActionHint("作答已暂时挂起，你可以重新开启麦克风，或直接点击右侧提交。");
+      setActionHint("作答录音已暂时挂起，您可以再次点击开启录制，或直接提交。");
     }
   };
 
-  // 强制生成报告
-  const handleFinishInterview = () => {
+  const handleFinishInterview = async () => {
     stopCamera();
+    stopActiveAudio();
     setStep("report");
+    setIsGeneratingReport(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          history: history,
+          jobTitle: jobTitle,
+          stressLevel: stressLevel,
+          resumeText: getFormattedResumeAndFiles(),
+          isFinish: true
+        }),
+      });
+
+      if (!response.ok) throw new Error("报告生成接口异常");
+      const reportJson = await response.json();
+      setReportData(reportJson);
+    } catch (error) {
+      console.error(error);
+      setReportData({
+        score: 60,
+        depthAnalysis: "由于网络异常，无法获取智能技术评估。请检查大模型配置。",
+        structureAnalysis: "无法获取结构化表达评估。请确保您的回答在历史记录中成功保存。",
+        stressAnalysis: "由于网络原因无法获取抗压能力诊断。"
+      });
+    } finally {
+      setIsGeneratingReport(false);
+    }
   };
 
   // 重新开始：彻底重置所有面试相关的 Context 状态，防止上下文污染
@@ -320,17 +404,46 @@ export default function Home() {
     console.log("【System】触发系统彻底重置。");
     setStep("setup");
     stopCamera();
-    
+    stopActiveAudio();
+
     // 彻底重置所有核心数据流状态
+    setUploadedFiles([]);
     setCurrentQuestion(
       "请结合你的项目，谈谈在超高并发场景下，你是如何防止 Redis 缓存击穿与雪崩的？请详细阐述你的双检锁设计与降级方案，不要背诵八股文。"
     );
     setHistory([]);
     setQuestionCount(1);
     setSatisfaction(85);
-    setActionHint("面试官正在凝视你，请点击下方按钮开始作答...");
+    setActionHint("系统准备就绪。请您梳理答题思路，点击下方按钮开始录音作答。");
     setIsRecording(false);
     setIsTimerActive(false); // 重设计时器活跃态
+    setReportData(null); // 清空上次报告数据
+    
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => track.stop());
+      audioStreamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
+    finalAudioBlobRef.current = null;
+  };
+
+  // 中途退出面试返回配置页面（不生成报告，仅干净重置面试状态，保留已填简历和文件）
+  const handleExitToSetup = () => {
+    stopActiveAudio();
+    stopCamera();
+    setStep("setup");
+    
+    // 干净重置所有面试过程变量，避免状态污染
+    setCurrentQuestion(
+      "请结合你的项目，谈谈在超高并发场景下，你是如何防止 Redis 缓存击穿与雪崩的？请详细阐述你的双检锁设计与降级方案，不要背诵八股文。"
+    );
+    setHistory([]);
+    setQuestionCount(1);
+    setSatisfaction(85);
+    setActionHint("面试即将开始，请做好准备...");
+    setIsRecording(false);
+    setIsTimerActive(false);
+    setReportData(null);
     
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach(track => track.stop());
@@ -343,23 +456,20 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col justify-between font-mono">
       
-      {/* 顶部通栏 - 大厂高压模拟环境标识 */}
       <header className="border-b border-zinc-800 bg-zinc-900/60 backdrop-blur px-6 py-4 flex justify-between items-center">
         <div className="flex items-center space-x-3">
-          <div className="w-3 h-3 bg-red-600 rounded-full animate-ping" />
-          <span className="text-sm tracking-wider font-semibold text-zinc-300">
-            AI STRESS TEST ARENA // 大厂极客面试沙场 
+          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+          <span className="text-xs tracking-wider font-semibold text-zinc-300">
+            AI 面试官正式接入 // 专业模拟评估系统
           </span>
         </div>
-        <div className="text-xs text-zinc-500 bg-zinc-950 px-3 py-1.5 rounded border border-zinc-800">
-          SYSTEM STATUS: <span className="text-red-500 font-bold">READY</span>
+        <div className="text-[10px] text-zinc-500 bg-zinc-950 px-3 py-1.5 rounded border border-zinc-800">
+          系统状态: <span className="text-emerald-500 font-bold">准备就绪</span>
         </div>
       </header>
 
-      {/* 主体交互区域：根据 step 调度不同的解耦组件 */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex flex-col justify-center">
         
-        {/* Step 1: 简历与配置页面 */}
         {step === "setup" && (
           <InterviewSetup
             jobTitle={jobTitle}
@@ -368,32 +478,31 @@ export default function Home() {
             setStressLevel={setStressLevel}
             resumeText={resumeText}
             setResumeText={setResumeText}
+            uploadedFiles={uploadedFiles}
+            setUploadedFiles={setUploadedFiles}
             onStart={handleStartInterview}
           />
         )}
 
-        {/* Step 2: 面试进行大厅 (Stress Room) */}
         {step === "interview" && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
             
-            {/* 左侧核心：面试官提问区与作答控制 */}
             <div className="lg:col-span-2 flex flex-col justify-between bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-2xl relative">
               
               <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/50">
                 <div className="flex items-center space-x-3">
-                  <div className="px-2 py-1 bg-red-950 text-red-500 rounded text-[10px] font-bold uppercase tracking-wider">
-                    Target: {jobTitle.split(" ")[0]}
+                  <div className="px-2 py-1 bg-zinc-800 text-zinc-300 border border-zinc-700/60 rounded text-[10px] font-bold tracking-wider">
+                    {jobTitle.split(" ")[0]}
                   </div>
-                  <span className="text-xs text-zinc-500">Round {questionCount}</span>
+                  <span className="text-xs text-zinc-500">第 {questionCount} 轮追问</span>
                 </div>
                 
-                {/* 满意度 */}
                 <div className="flex items-center space-x-3 text-xs w-48">
-                  <span className="text-zinc-500 whitespace-nowrap">满意度:</span>
+                  <span className="text-zinc-500 whitespace-nowrap">耐心值:</span>
                   <div className="w-full bg-zinc-950 h-2 rounded-full overflow-hidden border border-zinc-800">
                     <div 
                       className={`h-full transition-all duration-500 ${
-                        satisfaction > 60 ? "bg-zinc-400" : satisfaction > 30 ? "bg-amber-600" : "bg-red-600 animate-pulse"
+                        satisfaction > 60 ? "bg-emerald-600" : satisfaction > 30 ? "bg-amber-600" : "bg-red-600 animate-pulse"
                       }`}
                       style={{ width: `${satisfaction}%` }}
                     />
@@ -401,23 +510,36 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 考官问题区 */}
               <div className="flex-1 my-4">
-                <div className="flex items-center gap-1.5 text-zinc-500 text-xs mb-3 font-bold uppercase tracking-wider">
-                  <Terminal size={14} /> 严苛追问中 (Core Probing)
+                <div className="flex items-center gap-1.5 text-zinc-500 text-[10px] mb-3 font-bold uppercase tracking-wider">
+                  <Terminal size={12} /> 仿真对练中 (Core Probing)
                 </div>
-                <h2 className="text-lg md:text-xl font-bold leading-relaxed text-zinc-100 pl-4 border-l-2 border-red-600">
+                <h2 className="text-base md:text-lg font-bold leading-relaxed text-zinc-100 pl-4 border-l-2 border-zinc-500">
                   {currentQuestion}
                 </h2>
               </div>
 
-              {/* 答题状态动态提示 */}
+              {/* 如果关闭了麦克风，自动在此展示一个精美的文本作答输入框 */}
+              {!useMic && (
+                <div className="mt-6 mb-2">
+                  <label className="block text-[10px] uppercase tracking-wider text-zinc-550 mb-2 font-bold">
+                    请在此处键入您的解答 (键盘作答模式)
+                  </label>
+                  <textarea
+                    value={typedAnswer}
+                    onChange={(e) => setTypedAnswer(e.target.value)}
+                    placeholder="结合前述项目背景与架构原理进行阐述..."
+                    className="w-full h-36 bg-zinc-950 border border-zinc-800/80 rounded-lg p-4 text-xs focus:outline-none focus:border-zinc-700 transition resize-none font-mono text-zinc-300 leading-relaxed"
+                  />
+                </div>
+              )}
+
               <div className="mt-8 bg-zinc-950 border border-zinc-800/80 p-4 rounded-lg">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className={`flex-shrink-0 text-amber-500 ${isRecording ? "animate-pulse" : ""}`} size={16} />
                   <div>
-                    <div className="text-xs font-bold text-zinc-400 uppercase tracking-wide">考场侦测反馈</div>
-                    <div className="text-xs text-zinc-500 mt-1 leading-relaxed">
+                    <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wide">考场侦测反馈</div>
+                    <div className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
                       {actionHint}
                     </div>
                   </div>
@@ -426,25 +548,21 @@ export default function Home() {
 
               {/* 控制按钮组 */}
               <div className="mt-8 flex flex-wrap gap-4 items-center">
-                <button
-                  type="button"
-                  onClick={toggleRecording}
-                  className={`flex-shrink-0 flex items-center gap-2 px-6 py-4 rounded-lg font-bold text-xs tracking-wider uppercase transition ${
-                    isRecording 
-                      ? "bg-red-600 text-white animate-pulse" 
-                      : "bg-zinc-800 hover:bg-zinc-700 text-zinc-100"
-                  }`}
-                >
-                  {isRecording ? (
-                    <>
-                      <Square size={14} /> 暂停作答
-                    </>
-                  ) : (
-                    <>
-                      <Mic size={14} /> 开启麦克风作答
-                    </>
-                  )}
-                </button>
+                {/* 只有开启了麦克风才渲染录音按钮 */}
+                {useMic && (
+                  <button
+                    type="button"
+                    onClick={toggleRecording}
+                    className={`flex-shrink-0 flex items-center gap-2 px-6 py-4 rounded-lg font-bold text-xs tracking-wider uppercase transition ${
+                      isRecording 
+                        ? "bg-red-600 text-white animate-pulse" 
+                        : "bg-zinc-800 hover:bg-zinc-700 text-zinc-100"
+                    }`}
+                  >
+                    {isRecording ? <Square size={14} /> : <Mic size={14} />}
+                    {isRecording ? "暂停作答" : "开启麦克风作答"}
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -454,13 +572,24 @@ export default function Home() {
                   提交当前回答并深入追问
                 </button>
 
-                <button
-                  type="button"
-                  onClick={handleFinishInterview}
-                  className="text-xs text-zinc-500 hover:text-red-400 underline decoration-dashed underline-offset-4 transition ml-auto"
-                >
-                  结束面试，生成评分
-                </button>
+                {/* 右侧增加中途返回配置入口 */}
+                <div className="flex items-center space-x-3 ml-auto text-xs text-zinc-500">
+                  <button
+                    type="button"
+                    onClick={handleExitToSetup}
+                    className="hover:text-zinc-300 underline decoration-dashed underline-offset-4 transition"
+                  >
+                    返回修改配置
+                  </button>
+                  <span className="text-zinc-700">|</span>
+                  <button
+                    type="button"
+                    onClick={handleFinishInterview}
+                    className="hover:text-red-400 underline decoration-dashed underline-offset-4 transition animate-pulse"
+                  >
+                    结束面试，生成复盘报告
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -477,18 +606,18 @@ export default function Home() {
           </div>
         )}
 
-        {/* Step 3: 面试复盘报告 (Assess Report) */}
         {step === "report" && (
           <ReportCard
             jobTitle={jobTitle}
             stressLevel={stressLevel}
+            reportData={reportData}
+            isLoading={isGeneratingReport}
             onReset={handleReset}
           />
         )}
 
       </main>
 
-      {/* 极简底部通栏 */}
       <footer className="border-t border-zinc-800 bg-zinc-950 px-6 py-4 flex justify-between items-center text-[10px] text-zinc-600">
         <div>
           <span>PROTOTYPE v1.0.0</span>

@@ -1,3 +1,4 @@
+// app/components/Timer.tsx
 "use client";
 
 import React from "react";
