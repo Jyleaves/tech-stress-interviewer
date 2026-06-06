@@ -32,6 +32,9 @@ export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
 
+  // 维护面试对话历史，供大模型追问和最后生成报告
+  const [history, setHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+
   // 倒计时与高压计时逻辑
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -80,23 +83,80 @@ export default function Home() {
     setTimeRemaining(120);
     setSatisfaction(stressLevel === "hell" ? 90 : 80);
     setQuestionCount(1);
+
+    // 💡 初始化对话历史，把第一道默认问题存进去
+    setHistory([{ role: "assistant", content: currentQuestion }]);
   };
 
-  // 模拟切换下一题
-  const handleNextQuestion = () => {
-    setQuestionCount((c) => c + 1);
-    setTimeRemaining(120);
+  // 核心：点击提交作答时，通过 prompt 弹窗获取文本回答，并连线 DeepSeek 深度追问
+  const handleNextQuestion = async () => {
+    // 1. 弹出浏览器原生输入框，方便临时文本测试
+    const userInput = window.prompt(
+      "【大厂技术面作答通道】\n请在下方输入你的技术回答进行测试：",
+      "针对这个问题，我认为应当使用双检锁（Double-Checked Locking）配合 volatile 关键字来防止..."
+    );
+
+    // 如果用户点击了取消，或者输入为空，则中止
+    if (userInput === null || userInput.trim() === "") {
+      return;
+    }
+
+    // 2. 暂时关闭录音状态，更新考场反馈信息
     setIsRecording(false);
-    // 模拟大厂面试官高频追问
-    const mockQuestions = [
-      "针对你刚才提到的双检锁方案，如果瞬间涌入十万级并发，JVM 锁升级会引发怎样的 CPU 抖动？如何用分布式锁平替？",
-      "如果此时底层的 MySQL 出现主从延迟，你的方案如何确保数据强一致性？请详述脏数据产生的窗口期是多少毫秒？",
-      "好，那我们聊聊工程基础。在 Linux 线上服务器中，当发现某个 Java / Go 进程 CPU 飙升至 300% 时，你的排查命令和精准定位链路是什么？",
-      "（终战追问）最后一个问题：如果该服务目前需要整体进行容器化迁移，如何在 K8s 调度中做好资源的 Requests 和 Limits 规划，防止因为 OOM 导致核心链路崩溃？"
+    setActionHint("面试官正在审视你的回答，并连线 DeepSeek 整理下一轮技术追问...");
+
+    // 3. 将用户的回答追加到对话历史中
+    const updatedHistory = [
+      ...history,
+      { role: "user" as const, content: userInput }
     ];
-    const nextQ = mockQuestions[(questionCount - 1) % mockQuestions.length];
-    setCurrentQuestion(nextQ);
-    setActionHint("面试官对你的上一个回答表示怀疑，正在进行深度追问...");
+    setHistory(updatedHistory);
+
+    try {
+      // 4. 发送 POST 请求调用我们之前写好的 /api/chat 接口
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          history: updatedHistory,
+          jobTitle: jobTitle,
+          stressLevel: stressLevel,
+          resumeText: resumeText,
+          isFinish: false
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("大模型接口响应异常");
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        alert("大模型返回错误: " + data.error);
+        return;
+      }
+
+      // 5. 成功拿到 DeepSeek 追问，更新界面状态
+      setCurrentQuestion(data.question);
+      
+      // 6. 将大模型的追问也追加到历史中，以便下一次迭代
+      setHistory([
+        ...updatedHistory,
+        { role: "assistant" as const, content: data.question }
+      ]);
+
+      setQuestionCount((c) => c + 1);
+      setTimeRemaining(120);
+      setActionHint("面试官对你的上一个回答表示怀疑，正在进行深度追问...");
+
+    } catch (error) {
+      console.error("联调失败: ", error);
+      setActionHint("通信异常：无法连线到面试官大脑，请检查网络或 .env 秘钥配置。");
+      alert("对话失败，请确认你的 .env.local 中配置了 DEEPSEEK_API_KEY，且后端 npm run dev 终端无报错。");
+    }
   };
 
   // 模拟作答录制
