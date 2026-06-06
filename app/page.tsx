@@ -141,6 +141,24 @@ export default function Home() {
 
       // 5. 成功拿到 DeepSeek 追问，更新界面状态
       setCurrentQuestion(data.question);
+
+      // 💡 自动朗读面试官的追问：请求我们的后端接口并播放
+      setActionHint("面试官正在组织语言，口头向你提出深入追问...");
+      try {
+        const ttsResponse = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: data.question }),
+        });
+        if (ttsResponse.ok) {
+          const audioBlob = await ttsResponse.blob();
+          const audioUrl = URL.createObjectURL(audioBlob);
+          const audio = new Audio(audioUrl);
+          audio.play(); // 自动开口说话！
+        }
+      } catch (ttsErr) {
+        console.warn("TTS 自动播放失败: ", ttsErr);
+      }
       
       // 6. 将大模型的追问也追加到历史中，以便下一次迭代
       setHistory([
@@ -175,10 +193,20 @@ export default function Home() {
     setStep("report");
   };
 
-  // 重新开始
+  // 重新开始：彻底重置所有面试相关的 Context 状态，防止上下文污染
   const handleReset = () => {
     setStep("setup");
     stopCamera();
+    
+    // 💡 彻底重置所有核心数据流状态
+    setCurrentQuestion(
+      "请结合你的项目，谈谈在超高并发场景下，你是如何防止 Redis 缓存击穿与雪崩的？请详细阐述你的双检锁设计与降级方案，不要背诵八股文。"
+    );
+    setHistory([]);
+    setQuestionCount(1);
+    setSatisfaction(85);
+    setActionHint("面试官正在凝视你，请点击下方按钮开始作答...");
+    setIsRecording(false);
   };
 
   return (
