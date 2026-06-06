@@ -24,6 +24,7 @@ export default function Home() {
   const [questionCount, setQuestionCount] = useState(1);
   const [isRecording, setIsRecording] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(120); // 单题 120 秒倒计时
+  const [isTimerActive, setIsTimerActive] = useState(false);
   const [satisfaction, setSatisfaction] = useState(85); // 面试官耐心值 (0-100)
   const [actionHint, setActionHint] = useState("面试官正在凝视你，请点击下方按钮开始作答...");
 
@@ -43,16 +44,14 @@ export default function Home() {
   // 倒计时与高压计时逻辑
   useEffect(() => {
     let timer: NodeJS.Timeout;
-    if (step === "interview") {
+    if (step === "interview" && isTimerActive) {
       timer = setInterval(() => {
         setTimeRemaining((prev) => {
           if (prev <= 1) {
-            // 超时扣减面试官耐心
             setSatisfaction((s) => Math.max(s - 15, 10));
             setActionHint("【警告】回答超时！面试官认为你缺乏结构化表达能力。");
-            return 120; // 自动重置或强制进入下一题
+            return 120;
           }
-          // 地狱模式下，时间流逝会缓慢降低面试官满意度（催促效应）
           if (stressLevel === "hell" && prev % 15 === 0) {
             setSatisfaction((s) => Math.max(s - 2, 5));
           }
@@ -61,7 +60,7 @@ export default function Home() {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [step, stressLevel]);
+  }, [step, stressLevel, isTimerActive]);
 
   // 启动摄像头
   const startCamera = async () => {
@@ -81,6 +80,43 @@ export default function Home() {
     }
   };
 
+  // 🎙️ 统一封装：请求 TTS 语音合成并播放，播放完毕后再启动考场倒计时 (UX 终极优化)
+  const speakQuestion = async (text: string) => {
+    try {
+      setIsTimerActive(false); // 💡 提问开始，暂停考场倒计时
+      setActionHint("面试官正在对你进行技术发问，请认真倾听，梳理答题思路...");
+      
+      console.log("【TTS】正在向后端请求语音合成...");
+      const ttsResponse = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      if (ttsResponse.ok) {
+        const ttsBlob = await ttsResponse.blob();
+        const audioUrl = URL.createObjectURL(ttsBlob);
+        const audio = new Audio(audioUrl);
+        
+        // 💡 监听音频播放结束事件！
+        audio.onended = () => {
+          console.log("【TTS】播音结束。考场倒计时正式启动。");
+          setIsTimerActive(true); // 💡 面试官读完题，倒计时正式启动！
+          setActionHint("【考场提示】倒计时已开启！请点击下方“开启麦克风作答”开始陈述你的技术方案...");
+        };
+
+        audio.play(); 
+        console.log("【TTS】开始自动播音。");
+      } else {
+        // 如果 TTS 故障，作为兜底也开启倒计时
+        setIsTimerActive(true);
+      }
+    } catch (ttsErr) {
+      console.warn("TTS 自动播放失败: ", ttsErr);
+      setIsTimerActive(true);
+    }
+  };
+
   // 进入面试
   const handleStartInterview = () => {
     setStep("interview");
@@ -88,9 +124,10 @@ export default function Home() {
     setTimeRemaining(120);
     setSatisfaction(stressLevel === "hell" ? 90 : 80);
     setQuestionCount(1);
-
-    // 💡 初始化对话历史，把第一道默认问题存进去
     setHistory([{ role: "assistant", content: currentQuestion }]);
+
+    // 自动口头提问第一道默认技术题，读完后再开始倒计时
+    speakQuestion(currentQuestion);
   };
 
   // 核心闭环：结束录音 -> 语音转文字(ASR) -> 大模型追问(LLM) -> 语音合成朗读(TTS)
@@ -166,8 +203,8 @@ export default function Home() {
 
       console.log("🎤 ASR 识别出的作答文本: ", userText);
       
-      // 💡 弹窗提醒，看你刚才说的到底准不准（检测到准确后可注释掉）
-      window.alert(`【ASR 识别成功】\n您刚才说的是：\n\n"${userText}"`);
+      // 弹窗提醒，看你刚才说的到底准不准（检测到准确后可注释掉）
+      // window.alert(`【ASR 识别成功】\n您刚才说的是：\n\n"${userText}"`);
 
       setActionHint(`语音识别成功：\"${userText}\"，面试官正在用 DeepSeek 解析你的底层逻辑漏洞...`);
 
@@ -207,28 +244,8 @@ export default function Home() {
       setQuestionCount((c) => c + 1);
       setTimeRemaining(120);
 
-      // 💡 自动朗读面试官的追问
-      try {
-        setActionHint("面试官正在组织语言，口头向你提出深入追问...");
-        console.log("【TTS】正在向后端请求语音合成...");
-        const ttsResponse = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: chatData.question }),
-        });
-        if (ttsResponse.ok) {
-          const ttsBlob = await ttsResponse.blob();
-          const audioUrl = URL.createObjectURL(ttsBlob);
-          const audio = new Audio(audioUrl);
-          audio.play(); 
-          console.log("【TTS】开始自动播音。");
-        }
-      } catch (ttsErr) {
-        console.warn("TTS 自动播放失败: ", ttsErr);
-      }
-
-      setActionHint("面试官对你的上一个回答表示怀疑，正在进行深度追问...");
-
+      // 呼叫统一封装的语音播放函数，读完之后再重设计时器！
+      await speakQuestion(chatData.question);
     } catch (error) {
       console.error("【ERROR】完整的语音环路联调失败: ", error);
       setActionHint("通信异常：无法连线到面试官，请检查后端服务日志或 .env 配置。");
@@ -246,7 +263,7 @@ export default function Home() {
         
         console.log("【Mic】正在申请麦克风硬件权限...");
         const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioStreamRef.current = audioStream; // 💡 隔离保存音轨流
+        audioStreamRef.current = audioStream; // 隔离保存音轨流
         
         const mediaRecorder = new MediaRecorder(audioStream);
         mediaRecorderRef.current = mediaRecorder;
@@ -271,7 +288,7 @@ export default function Home() {
         console.log("【Mic】手动停止录制...");
         const recorder = mediaRecorderRef.current; 
         if (recorder && recorder.state !== "inactive") {
-          // 💡 重点：绑定 onstop 回调，在手动暂停时将音频保存到缓存引用中
+          // 绑定 onstop 回调，在手动暂停时将音频保存到缓存引用中
           recorder.onstop = () => {
             finalAudioBlobRef.current = new Blob(audioChunksRef.current, { type: "audio/webm" });
             console.log("【Mic】手动录音文件已成功封包并暂存。大小：", finalAudioBlobRef.current.size);
@@ -300,10 +317,11 @@ export default function Home() {
 
   // 重新开始：彻底重置所有面试相关的 Context 状态，防止上下文污染
   const handleReset = () => {
+    console.log("【System】触发系统彻底重置。");
     setStep("setup");
     stopCamera();
     
-    // 💡 彻底重置所有核心数据流状态
+    // 彻底重置所有核心数据流状态
     setCurrentQuestion(
       "请结合你的项目，谈谈在超高并发场景下，你是如何防止 Redis 缓存击穿与雪崩的？请详细阐述你的双检锁设计与降级方案，不要背诵八股文。"
     );
@@ -312,7 +330,13 @@ export default function Home() {
     setSatisfaction(85);
     setActionHint("面试官正在凝视你，请点击下方按钮开始作答...");
     setIsRecording(false);
+    setIsTimerActive(false); // 重设计时器活跃态
     
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => track.stop());
+      audioStreamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
     finalAudioBlobRef.current = null;
   };
 
