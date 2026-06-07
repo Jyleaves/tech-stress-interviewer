@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "edge-tts-universal": "^1.4.0",
+    "html2canvas-pro": "^2.0.4",
+    "jspdf": "^4.2.1",
     "lucide-react": "^1.17.0",
     "mammoth": "^1.12.0",
     "next": "16.2.7",

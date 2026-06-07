@@ -54,6 +54,7 @@ export default function InterviewRoom({
   const [isApiError, setIsApiError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false); // 语音转写中
+  const [isInputLocked, setIsInputLocked] = useState(false);
   const [lastSubmittedText, setLastSubmittedText] = useState("");
   const [lastSubmittedHistory, setLastSubmittedHistory] = useState<HistoryItem[]>([]);
 
@@ -187,23 +188,40 @@ export default function InterviewRoom({
     if (isTimerActive) {
       timer = setInterval(() => {
         setTimeRemaining((prev) => {
-          if (prev <= 1) {
-            setSatisfaction((s) => Math.max(s - 15, 10));
-            setTimeoutCount((c) => c + 1);
-            setActionHint("【警告】回答超时！面试官认为你缺乏结构化表达能力。");
-            return initTimeLimit;
+          const nextVal = prev - 1;
+
+          if (nextVal < 0) {
+            // 已进入超时区间
+            const overtimeSecs = Math.abs(nextVal);
+            
+            // 1. 每超时 5 秒，客观衰减面试官 3 点耐心值
+            if (overtimeSecs % 5 === 0) {
+              setSatisfaction((s) => Math.max(0, s - 3));
+            }
+
+            // 2. 刚进入超时以及每隔 60 秒，记录一次严重超时次数
+            if (overtimeSecs === 1 || overtimeSecs % 60 === 0) {
+              setTimeoutCount((c) => c + 1);
+              setActionHint("【超时警报】您的解答用时已经超出推荐时长，请立即提炼核心并提交！");
+            }
+          } else {
+            // 正常倒计时阶段：若处于极高压地狱模式下，每 15 秒依然缓慢递减 2 点
+            if (stressLevel === "hell" && nextVal % 15 === 0) {
+              setSatisfaction((s) => Math.max(0, s - 2));
+            }
           }
-          if (stressLevel === "hell" && prev % 15 === 0) setSatisfaction((s) => Math.max(s - 2, 5));
-          return prev - 1;
+          return nextVal;
         });
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [isTimerActive, stressLevel, initTimeLimit]);
+  }, [isTimerActive, stressLevel]);
 
-  // 💡 对话请求发送器
+  // 对话请求发送器
   async function sendChatRequest(userText: string, currentHistory: HistoryItem[]) {
     setIsSubmitting(true);
+    setIsInputLocked(true);
+    setIsTimerActive(false);
     setIsApiError(false);
     setActionHint("面试官正在研判您的逻辑...");
 
@@ -236,6 +254,9 @@ export default function InterviewRoom({
         return;
       }
 
+      const delta = typeof chatData.patienceChange === "number" ? chatData.patienceChange : -2;
+      setSatisfaction((s) => Math.max(0, Math.min(100, s + delta)));
+
       if (chatData.action === "new-topic") {
         setTopicCount(c => c + 1);
         setFollowUpCount(0);
@@ -243,8 +264,9 @@ export default function InterviewRoom({
         setFollowUpCount(c => c + 1);
       }
 
-      setTimeRemaining(initTimeLimit);
       setTypedAnswer("");
+      setIsInputLocked(false);
+      setTimeRemaining(initTimeLimit);
 
       setCurrentQuestion(chatData.question);
       setHistory([...newHistory, { role: "assistant", content: chatData.question }]);
@@ -262,7 +284,7 @@ export default function InterviewRoom({
     }
   }
 
-  // 💡 统一提交处理：直接从文本框读取数据提交
+  // 统一提交处理：直接从文本框读取数据提交
   async function handleNextQuestion() {
     if (isSubmitting || isTranscribing) return;
 
@@ -272,12 +294,16 @@ export default function InterviewRoom({
     }
 
     setLastSubmittedText(userText);
+    setIsTimerActive(false);
+    setIsInputLocked(true);
     await sendChatRequest(userText, history);
   }
 
   // 手动一键重试逻辑
   async function handleRetry() {
     if (!lastSubmittedText || isSubmitting) return;
+    setIsTimerActive(false);
+    setIsInputLocked(true);
     await sendChatRequest(lastSubmittedText, lastSubmittedHistory);
   }
 
@@ -288,7 +314,7 @@ export default function InterviewRoom({
 
   // 麦克风独立控制：仅作为“语音辅助打字机”，录音结束后进行 ASR 翻译并将文本无缝追加到输入框
   async function toggleRecording() {
-    if (isSubmitting || isTranscribing) return;
+    if (isSubmitting || isTranscribing || isInputLocked) return;
 
     if (!isRecording) {
       try {
@@ -352,16 +378,22 @@ export default function InterviewRoom({
     </div>
   );
 
+  // 定义统一的拦截保护伞，确保所有输入层在 Submitting、Transcribing、InputLocked 状态下完全灰度并锁死
+  const isAnyLocked = isSubmitting || isTranscribing || isInputLocked;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch w-full max-w-7xl mx-auto">
       <div className="lg:col-span-2 flex flex-col justify-between bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-2xl">
         <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/50">
-          <div className="flex items-center space-x-3">
-            <div className="px-2 py-1 bg-zinc-800 text-zinc-300 border border-zinc-700/60 rounded text-[10px] font-bold tracking-wider">
-              {jobTitle.split(" ")[0]}
+          <div className="flex items-center space-x-3 min-w-0">
+            <div 
+                className="px-2 py-1 bg-zinc-800 text-zinc-300 border border-zinc-700/60 rounded text-[10px] font-bold tracking-wider truncate max-w-[140px] sm:max-w-[260px] md:max-w-[360px]"
+                title={jobTitle}
+            >
+                {jobTitle}
             </div>
-            <span className="text-xs text-zinc-500 font-bold">
-              话题: {topicCount}/{maxQuestions} <span className="mx-1">|</span> 连环追问: {followUpCount}
+            <span className="text-xs text-zinc-500 font-bold shrink-0">
+                话题: {topicCount}/{maxQuestions} <span className="mx-1">|</span> 连环追问: {followUpCount}
             </span>
           </div>
           <div className="flex items-center space-x-3 text-xs w-48">
@@ -418,15 +450,17 @@ export default function InterviewRoom({
           <textarea 
             value={typedAnswer} 
             onChange={e => setTypedAnswer(e.target.value)} 
-            disabled={isSubmitting || isTranscribing}
+            disabled={isAnyLocked}
             placeholder={
               isSubmitting 
                 ? "面试官思考中，内容暂时锁定..." 
                 : isTranscribing 
                   ? "正在智能转写中，请稍候..." 
-                  : useMic 
-                    ? "请键入您的技术解答，或者利用下方的麦克风直接说出您的想法并在编辑微调后点击提交..." 
-                    : "请在这里键入技术解答并点击提交..."
+                  : isInputLocked
+                    ? "解答已暂存锁定，请尝试重新生成提问..."
+                    : useMic 
+                        ? "请键入您的技术解答，或者利用下方的麦克风直接说出您的想法并在编辑微调后点击提交..." 
+                        : "请在这里键入技术解答并点击提交..."
             }
             className="w-full h-36 bg-zinc-950 border border-zinc-800/80 rounded-lg p-4 text-xs focus:border-zinc-700 font-mono text-zinc-300 resize-none disabled:opacity-40 leading-relaxed" 
           />
@@ -434,7 +468,7 @@ export default function InterviewRoom({
 
         {/* 考场反馈实时条 */}
         <div className="mt-8 bg-zinc-950 border border-zinc-800/80 p-4 rounded-lg flex items-start gap-3">
-          <AlertTriangle className={`text-amber-500 mt-0.5 ${isRecording || isSubmitting || isTranscribing ? "animate-pulse" : ""}`} size={16} />
+          <AlertTriangle className={`text-amber-500 mt-0.5 ${isRecording || isSubmitting || isTranscribing || isInputLocked ? "animate-pulse" : ""}`} size={16} />
           <div>
             <div className="text-[10px] font-bold text-zinc-400">考场反馈</div>
             <div className="text-[10px] text-zinc-500 mt-1">{actionHint}</div>
@@ -446,8 +480,8 @@ export default function InterviewRoom({
           {useMic && (
             <button 
               onClick={toggleRecording} 
-              disabled={isSubmitting || isTranscribing}
-              className={`flex items-center gap-2 px-6 py-4 rounded-lg font-bold text-xs uppercase transition ${isSubmitting || isTranscribing ? "opacity-40 cursor-not-allowed" : ""} ${isRecording ? "bg-red-600 animate-pulse" : "bg-zinc-800 hover:bg-zinc-750 text-zinc-200"}`}
+              disabled={isAnyLocked}
+              className={`flex items-center gap-2 px-6 py-4 rounded-lg font-bold text-xs uppercase transition ${isAnyLocked ? "opacity-40 cursor-not-allowed" : ""} ${isRecording ? "bg-red-600 animate-pulse" : "bg-zinc-800 hover:bg-zinc-750 text-zinc-200"}`}
             >
               {isTranscribing ? (
                 <>
@@ -457,7 +491,7 @@ export default function InterviewRoom({
               ) : (
                 <>
                   {isRecording ? <Square size={14} /> : <Mic size={14} />} 
-                  {isRecording ? "说完了（点击转换）" : "麦克风语音输入辅助"}
+                  {isRecording ? "说完了（点击转换）" : "麦克风语音输入"}
                 </>
               )}
             </button>
@@ -465,8 +499,8 @@ export default function InterviewRoom({
           
           <button 
             onClick={handleNextQuestion} 
-            disabled={isSubmitting || isTranscribing}
-            className={`bg-zinc-100 text-zinc-950 hover:bg-zinc-200 px-6 py-4 rounded-lg font-bold text-xs uppercase transition flex items-center gap-2 ${isSubmitting || isTranscribing ? "opacity-50 cursor-not-allowed" : ""}`}
+            disabled={isAnyLocked}
+            className={`bg-zinc-100 text-zinc-950 hover:bg-zinc-200 px-6 py-4 rounded-lg font-bold text-xs uppercase transition flex items-center gap-2 ${isAnyLocked ? "opacity-50 cursor-not-allowed" : ""}`}
           >
             {isSubmitting ? (
               <>

@@ -4,20 +4,13 @@
 import React, { useState } from "react";
 import InterviewSetup from "./components/InterviewSetup";
 import InterviewRoom from "./components/InterviewRoom";
-import ReportCard from "./components/ReportCard";
+import ReportCard, { ReportData } from "./components/ReportCard";
 
 type Step = "setup" | "interview" | "report";
 
 interface HistoryItem {
   role: "user" | "assistant";
   content: string;
-}
-
-interface ReportData {
-  score: number;
-  depthAnalysis: string;
-  structureAnalysis: string;
-  stressAnalysis: string;
 }
 
 export default function Home() {
@@ -75,9 +68,19 @@ export default function Home() {
     } catch (e) {
       setReportData({
         score: 60,
-        depthAnalysis: "网络异常，无法获取技术评估。",
-        structureAnalysis: "无法获取结构化表达评估。",
-        stressAnalysis: "由于网络原因无法诊断。"
+        dimensions: {
+          knowledgeDepth: 60,
+          logicSTAR: 60,
+          stressCoping: 60,
+          problemSolving: 60,
+          communication: 60
+        },
+        depthAnalysis: "网络异常，无法获取大模型深度技术评估。",
+        structureAnalysis: "网络异常，无法获取结构化表达评估。",
+        stressAnalysis: "由于网络原因无法进行抗压诊断。",
+        strongPoints: ["系统降级保护中，基础流程跑通"],
+        weakPoints: ["API 请求失败，未能获取大模型真实诊断数据，请检查后端 /api/chat 接口"],
+        actionableAdvice: ["请打开浏览器控制台 (F12) 查看 Network 面板，确认 API 是否返回了正确的 JSON 格式"]
       });
     } finally {
       setIsGeneratingReport(false);
