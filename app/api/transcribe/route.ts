@@ -8,8 +8,8 @@ const openai = new OpenAI({
 });
 
 export async function POST(req: Request) {
-  console.log("--- 新的 ASR 请求 ---");
-  console.log("【Env 检查】API Key:", process.env.SILICONFLOW_API_KEY ? (process.env.SILICONFLOW_API_KEY.substring(0, 8) + "***") : "未检测到");
+  // console.log("--- 新的 ASR 请求 ---");
+  // console.log("【Env 检查】API Key:", process.env.SILICONFLOW_API_KEY ? (process.env.SILICONFLOW_API_KEY.substring(0, 8) + "***") : "未检测到");
 
   try {
     const formData = await req.formData();
@@ -18,9 +18,6 @@ export async function POST(req: Request) {
     if (!file) {
       return NextResponse.json({ error: "未检测到音频文件上传" }, { status: 400 });
     }
-
-    // 💡 重点修复：在 Node.js 后端，不能将浏览器的 File 实例直接丢给 openai 库。
-    // 我们需要先读成 ArrayBuffer -> 包装为 Node Buffer -> 用 toFile 转成规范的文件负载！
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const filePayload = await toFile(buffer, "answer.webm", { type: "audio/webm" });
