@@ -1,3 +1,4 @@
+// app/components/ReportCard.tsx
 "use client";
 
 import React, { useState } from "react";
@@ -26,9 +27,10 @@ interface ReportCardProps {
   reportData: ReportData | null;
   isLoading: boolean;
   onReset: () => void;
+  onRegenerate?: () => void;
 }
 
-export default function ReportCard({ jobTitle, stressLevel, reportData, isLoading, onReset }: ReportCardProps) {
+export default function ReportCard({ jobTitle, stressLevel, reportData, isLoading, onReset, onRegenerate }: ReportCardProps) {
   const [isPrinting, setIsPrinting] = useState(false);
 
   const handleExportPDF = async () => {
@@ -57,52 +59,42 @@ export default function ReportCard({ jobTitle, stressLevel, reportData, isLoadin
       const pageWidth = pdf.internal.pageSize.getWidth(); // 210mm
       const pageHeight = pdf.internal.pageSize.getHeight(); // 297mm
       
-      // 🌟 设定 10mm 的呼吸感页边距
       const margin = 10; 
       const availWidth = pageWidth - margin * 2;  // 190mm
       const availHeight = pageHeight - margin * 2; // 277mm
 
-      // 计算图片铺满可用宽度时的初始高度
       const ratio = availWidth / canvas.width;
       let imgWidth = availWidth;
       let imgHeight = canvas.height * ratio;
 
-      // 🚀 核心：智能缩放逻辑 (Smart Fit)
-      // 如果高度超出了可用高度，但超出的比例在 20% 以内，则强制等比缩小，塞进单页！
       const overflowRatio = imgHeight / availHeight;
       if (overflowRatio > 1 && overflowRatio <= 1.20) {
         const scaleDown = availHeight / imgHeight;
         imgWidth *= scaleDown;
-        imgHeight = availHeight; // 高度锁定为可用高度
+        imgHeight = availHeight; 
       }
 
-      // 📄 场景 A：内容在一页内（包含被智能缩放后塞进一页的情况）
       if (imgHeight <= availHeight) {
-        // 计算居中偏移量
         const offsetX = (pageWidth - imgWidth) / 2;
         const offsetY = (pageHeight - imgHeight) / 2;
         pdf.addImage(imgData, "JPEG", offsetX, offsetY, imgWidth, imgHeight);
-      } 
-      // 📑 场景 B：内容实在太长，必须多页分页
-      else {
+      } else {
         let heightLeft = imgHeight;
-        let position = margin; // 第一页 Y 轴起点
+        let position = margin; 
         let pageIndex = 0;
 
         while (heightLeft > 0) {
           if (pageIndex > 0) {
             pdf.addPage();
           }
-          // 添加图片 (利用 position 为负数来实现长图向下滚动截断)
           pdf.addImage(imgData, "JPEG", margin, position, imgWidth, imgHeight);
           
           heightLeft -= availHeight;
-          position -= availHeight; // 下一页图片的 Y 坐标要往上移一页的高度
+          position -= availHeight; 
           pageIndex++;
         }
       }
 
-      // 触发下载
       pdf.save(`AI面试能力诊断报告_${jobTitle.replace(/[\s\(\)（）]/g, "_")}.pdf`);
       
     } catch (error) {
@@ -145,6 +137,9 @@ export default function ReportCard({ jobTitle, stressLevel, reportData, isLoadin
       case "communication": return "沟通效率与语意压缩";
     }
   };
+
+  // 检测当前展示的报告是否是因网络波动产生的降级兜底报告
+  const isFallbackReport = data.depthAnalysis.includes("网络连接超时") || data.depthAnalysis.includes("网络异常");
 
   return (
     <div className="max-w-4xl mx-auto w-full space-y-6">
@@ -252,14 +247,26 @@ export default function ReportCard({ jobTitle, stressLevel, reportData, isLoadin
       </div>
 
       <div className="flex flex-col sm:flex-row gap-4">
-        <button
-          type="button"
-          onClick={handleExportPDF}
-          disabled={isPrinting}
-          className="flex-1 bg-amber-600 hover:bg-amber-700 text-zinc-100 font-bold py-3.5 rounded-xl text-xs tracking-wider uppercase transition flex items-center justify-center gap-2 shadow-lg disabled:opacity-50"
-        >
-          {isPrinting ? (<><Loader2 className="animate-spin" size={13} /> 正在为您下载 PDF...</>) : (<><Download size={13} /> 导出为 PDF</>)}
-        </button>
+        {/* 💡 智能呈现：若为出错的降级报告，展示耀眼的“重新生成”重试按钮；若为正常报告，则展示“下载 PDF” */}
+        {isFallbackReport && onRegenerate ? (
+          <button
+            type="button"
+            onClick={onRegenerate}
+            className="flex-1 bg-amber-600 hover:bg-amber-700 text-zinc-100 font-bold py-3.5 rounded-xl text-xs tracking-wider uppercase transition flex items-center justify-center gap-2 shadow-lg animate-pulse"
+          >
+            <RefreshCw size={12} className="animate-[spin_4s_linear_infinite]" />
+            重新尝试生成诊断报告
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleExportPDF}
+            disabled={isPrinting}
+            className="flex-1 bg-amber-600 hover:bg-amber-700 text-zinc-100 font-bold py-3.5 rounded-xl text-xs tracking-wider uppercase transition flex items-center justify-center gap-2 shadow-lg disabled:opacity-50"
+          >
+            {isPrinting ? (<><Loader2 className="animate-spin" size={13} /> 正在为您下载 PDF...</>) : (<><Download size={13} /> 导出为 PDF</>)}
+          </button>
+        )}
 
         <button
           type="button"

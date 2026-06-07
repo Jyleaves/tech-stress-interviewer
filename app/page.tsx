@@ -16,7 +16,7 @@ interface HistoryItem {
 export default function Home() {
   const [step, setStep] = useState<Step>("setup");
   
-  // 面试前置配置字典
+  // 面试前置配置
   const [jobTitle, setJobTitle] = useState("求职开发（字节跳动 - 核心业务线后端开发一面）");
   const [stressLevel, setStressLevel] = useState("normal"); 
   const [resumeText, setResumeText] = useState("");
@@ -33,12 +33,63 @@ export default function Home() {
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [reportData, setReportData] = useState<ReportData | null>(null);
 
+  // 用于在内存中暂存最后的面试数据，以便网络出错时支持手动无损重试生成
+  const [savedHistory, setSavedHistory] = useState<HistoryItem[]>([]);
+  const [savedSatisfaction, setSavedSatisfaction] = useState(80);
+  const [savedTimeout, setSavedTimeout] = useState(0);
+
   const handleStartInterview = (cameraPref: boolean, micPref: boolean, customLimit: number, customRounds: number) => {
     setUseCamera(cameraPref);
     setUseMic(micPref);
     setInitTimeLimit(customLimit);
     setMaxQuestions(customRounds);
     setStep("interview");
+  };
+
+  // 将报告生成逻辑封装成高内聚方法，同时支持首次生成和重试生成
+  const triggerReportGeneration = async (
+    historyToUse: HistoryItem[], 
+    satisfactionToUse: number, 
+    timeoutToUse: number
+  ) => {
+    setIsGeneratingReport(true);
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          history: historyToUse,
+          jobTitle, stressLevel, interviewContext,
+          satisfaction: satisfactionToUse, 
+          timeoutCount: timeoutToUse,
+          isFinish: true 
+        }),
+      });
+      if (!response.ok) throw new Error("API 异常");
+      
+      const json = await response.json();
+      setReportData(json as ReportData);
+    } catch (e) {
+      // 结构体完美匹配新版商业复盘报告，阻断 React 渲染树崩溃
+      setReportData({
+        score: 60,
+        dimensions: {
+          knowledgeDepth: 50,
+          logicSTAR: 50,
+          stressCoping: 50,
+          problemSolving: 50,
+          communication: 50
+        },
+        depthAnalysis: "【网络连接超时】由于公网数据传输发生波动，未能成功拉取技术原理评估。请放心，您的作答数据已安全锁定保存，请点击下方的重试按钮重新生成复盘。",
+        structureAnalysis: "由于网络异常，未能成功拉取结构化表达评估。",
+        stressAnalysis: "由于网络异常，未能成功拉取情绪抗压能力评价。",
+        strongPoints: ["未检测到（报告生成超时，请重试）"],
+        weakPoints: ["未检测到（报告生成超时，请重试）"],
+        actionableAdvice: ["网络连接出现波动，请点击底部的“重新尝试生成诊断报告”按钮进行无损重试。"]
+      });
+    } finally {
+      setIsGeneratingReport(false);
+    }
   };
 
   const handleInterviewFinish = async (
@@ -48,43 +99,18 @@ export default function Home() {
     finalHistory: HistoryItem[]
   ) => {
     setStep("report");
-    setIsGeneratingReport(true);
+    
+    // 暂存数据进入内存，保障可以手动一键重刷
+    setSavedHistory(finalHistory);
+    setSavedSatisfaction(satisfaction);
+    setSavedTimeout(timeoutCount);
 
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          history: finalHistory,
-          jobTitle, stressLevel, satisfaction, timeoutCount,
-          interviewContext,
-          isFinish: true 
-        }),
-      });
-      if (!response.ok) throw new Error("API 异常");
-      
-      const json = await response.json();
-      setReportData(json as ReportData);
-    } catch (e) {
-      setReportData({
-        score: 60,
-        dimensions: {
-          knowledgeDepth: 60,
-          logicSTAR: 60,
-          stressCoping: 60,
-          problemSolving: 60,
-          communication: 60
-        },
-        depthAnalysis: "网络异常，无法获取大模型深度技术评估。",
-        structureAnalysis: "网络异常，无法获取结构化表达评估。",
-        stressAnalysis: "由于网络原因无法进行抗压诊断。",
-        strongPoints: ["系统降级保护中，基础流程跑通"],
-        weakPoints: ["API 请求失败，未能获取大模型真实诊断数据，请检查后端 /api/chat 接口"],
-        actionableAdvice: ["请打开浏览器控制台 (F12) 查看 Network 面板，确认 API 是否返回了正确的 JSON 格式"]
-      });
-    } finally {
-      setIsGeneratingReport(false);
-    }
+    await triggerReportGeneration(finalHistory, satisfaction, timeoutCount);
+  };
+
+  // 提供给 ReportCard 调用的手动重试恢复接口
+  const handleRegenerateReport = async () => {
+    await triggerReportGeneration(savedHistory, savedSatisfaction, savedTimeout);
   };
 
   const handleReset = () => {
@@ -138,6 +164,7 @@ export default function Home() {
             jobTitle={jobTitle} stressLevel={stressLevel}
             reportData={reportData} isLoading={isGeneratingReport}
             onReset={handleReset}
+            onRegenerate={handleRegenerateReport} // 注入重试接口
           />
         )}
       </main>

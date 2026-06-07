@@ -138,24 +138,51 @@ ${resumeText || "（候选人未提供简历背景，请按【信息缺失自适
 }
       `.trim();
 
-      const params = {
-        model: "deepseek-v4-pro", 
-        messages: [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: reportPrompt }],
-        response_format: { type: "json_object" }, 
-        reasoning_effort: "high", 
-        extra_body: {
-          thinking: {
-            type: "enabled"
+      let reportRetries = 3;
+      let reportReply = "";
+
+      while (reportRetries > 0) {
+        try {
+          const params = {
+            model: "deepseek-v4-pro", 
+            messages: [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: reportPrompt }],
+            response_format: { type: "json_object" }, 
+            max_tokens: 4000,
+            reasoning_effort: "high", 
+            extra_body: {
+              thinking: {
+                type: "enabled"
+              }
+            }
+          };
+
+          const response = await deepseek.chat.completions.create(
+            params as unknown as Parameters<typeof deepseek.chat.completions.create>[0]
+          ) as { choices: Array<{ message: { content: string | null } }> };
+
+          const tempContent = response.choices[0].message.content || "";
+          if (tempContent.trim() !== "") {
+            const parsed = safeParseJson(tempContent);
+            // 确保解析对象合规，且包含了能力评分对象
+            if (parsed && parsed.score && parsed.dimensions) {
+              reportReply = tempContent;
+              break;
+            }
           }
+        } catch (err) {
+          console.warn(`[复盘报告生成异常] 正在执行自动重试，剩余 ${reportRetries - 1} 次...`, err);
         }
-      };
+        reportRetries--;
+        if (reportRetries > 0) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
 
-      const response = await deepseek.chat.completions.create(
-        params as unknown as Parameters<typeof deepseek.chat.completions.create>[0]
-      ) as { choices: Array<{ message: { content: string | null } }> };
+      if (!reportReply) {
+        return NextResponse.json({ error: "服务器繁忙，未生成有效报告。" }, { status: 500 });
+      }
 
-      const reply = response.choices[0].message.content || "{}";
-      return NextResponse.json(safeParseJson(reply));
+      return NextResponse.json(safeParseJson(reportReply));
     }
 
     // 场景二：生成第一个问题
@@ -215,7 +242,7 @@ ${resumeText || "（候选人未提供简历背景，请按【信息缺失自适
             } 
           ],
           temperature: 0.7,
-          max_tokens: 800,
+          max_tokens: 1000,
           response_format: { type: "json_object" }, 
         });
 
