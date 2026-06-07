@@ -62,7 +62,7 @@ export default function InterviewSetup({
     if (val === "template1") {
       setJobTitle("求职开发（字节跳动 - 核心业务线后端开发一面）");
     } else if (val === "template2") {
-      setJobTitle("学术保研（清华大学 - 计算机科学与技术夏令营学术面试）");
+      setJobTitle("学术保研（北京大学 - 计算机科学与技术夏令营学术面试）");
     } else if (val === "template3") {
       setJobTitle("前沿算法（微软亚洲研究院 - 自然语言处理方向研究员面试）");
     } else if (val === "custom") {
@@ -199,7 +199,7 @@ export default function InterviewSetup({
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 text-xs focus:outline-none focus:border-zinc-700 transition text-zinc-300 truncate"
               >
                 <option value="template1">求职开发（字节跳动 - 核心业务线后端开发一面）</option>
-                <option value="template2">学术保研（清华大学 - 计算机科学与技术夏令营学术面试）</option>
+                <option value="template2">学术保研（北京大学 - 计算机科学与技术夏令营学术面试）</option>
                 <option value="template3">前沿算法（微软亚洲研究院 - 自然语言处理方向研究员面试）</option>
                 <option value="custom">✍️ 自定义面试场景背景</option>
               </select>
@@ -310,6 +310,7 @@ export default function InterviewSetup({
                   onChange={(e) => setCustomRounds(Number(e.target.value))}
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-xs focus:outline-none focus:border-zinc-700 text-zinc-300"
                 >
+                  <option value={2}>2 轮</option>
                   <option value={3}>3 轮</option>
                   <option value={4}>4 轮（推荐）</option>
                   <option value={5}>5 轮</option>

@@ -223,6 +223,7 @@ export default function InterviewRoom({
     setIsInputLocked(true);
     setIsTimerActive(false);
     setIsApiError(false);
+    stopActiveAudio();
     setActionHint("面试官正在研判您的逻辑...");
 
     const newHistory = [...currentHistory, { role: "user" as const, content: userText }];
