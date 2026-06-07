@@ -13,7 +13,7 @@ interface InterviewSetupProps {
   setResumeText: (val: string) => void;
   uploadedFiles: { name: string; content: string }[];
   setUploadedFiles: React.Dispatch<React.SetStateAction<{ name: string; content: string }[]>>;
-  onStart: (useCamera: boolean, useMic: boolean) => void; // 将硬件偏好传回给父组件
+  onStart: (useCamera: boolean, useMic: boolean, customLimit: number, customRounds: number) => void;
 }
 
 export default function InterviewSetup({
@@ -28,12 +28,22 @@ export default function InterviewSetup({
   onStart,
 }: InterviewSetupProps) {
   
+  // 经典模版与自定义背景控制
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("template1");
+  const [customCompany, setCustomCompany] = useState<string>("");
+  const [customRole, setCustomRole] = useState<string>("");
+
+  // 用于控制自定义的单题回答时限（默认 120 秒）
+  const [customLimit, setCustomLimit] = useState<number>(120);
+  // 用于控制自定义的面试追问轮数上限（默认 4 轮）
+  const [customRounds, setCustomRounds] = useState<number>(4);
+
   const [hasCamera, setHasCamera] = useState<boolean>(false);
   const [hasMic, setHasMic] = useState<boolean>(false);
-
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 💡 【修正】通过异步延迟更新解决 React 19 的同步渲染警告，防止 Hydration 报错 [1.1.9, 2.1.3]
   useEffect(() => {
     const savedCamera = localStorage.getItem("pref_camera");
     const savedMic = localStorage.getItem("pref_mic");
@@ -46,7 +56,28 @@ export default function InterviewSetup({
     return () => clearTimeout(timer);
   }, []);
 
-  // 摄像头开关与存储
+  // 场景模版切换
+  const handleTemplateChange = (val: string) => {
+    setSelectedTemplate(val);
+    if (val === "template1") {
+      setJobTitle("求职开发（字节跳动 - 核心业务线后端开发一面）");
+    } else if (val === "template2") {
+      setJobTitle("学术保研（清华大学 - 计算机科学与技术夏令营学术面试）");
+    } else if (val === "template3") {
+      setJobTitle("前沿算法（微软亚洲研究院 - 自然语言处理方向研究员面试）");
+    } else if (val === "custom") {
+      setJobTitle(`${customCompany || "自主申报"} - ${customRole || "自定义研究方向"}`);
+    }
+  };
+
+  // 监听自定义表单，拼凑成目标 jobTitle 并反馈给父组件
+  useEffect(() => {
+    if (selectedTemplate === "custom") {
+      setJobTitle(`${customCompany || "自主申报"} - ${customRole || "自定义领域"}`);
+    }
+  }, [customCompany, customRole, selectedTemplate, setJobTitle]);
+
+  // 摄像头授权
   const toggleCamera = async () => {
     const nextState = !hasCamera;
     if (nextState) {
@@ -66,7 +97,7 @@ export default function InterviewSetup({
     }
   };
 
-  // 麦克风开关与存储
+  // 麦克风授权
   const toggleMic = async () => {
     const nextState = !hasMic;
     if (nextState) {
@@ -89,6 +120,9 @@ export default function InterviewSetup({
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // 立即清空 input 的内部值，强制下次选择同一文件时也能触发 onChange
+    e.target.value = ""; 
 
     if (file.type === "text/plain") {
       const reader = new FileReader();
@@ -147,21 +181,21 @@ export default function InterviewSetup({
 
       <div className="space-y-8">
         
-        {/* 岗位选择与评估模式 */}
+        {/* 二级联动：场景模版切换 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-450 mb-2 font-bold">
-              目标岗位与技术方向
+            <label className="block text-[11px] uppercase tracking-wider text-zinc-405 mb-2 font-bold">
+              选择面试场景与模版
             </label>
             <select
-              value={jobTitle}
-              onChange={(e) => setJobTitle(e.target.value)}
+              value={selectedTemplate}
+              onChange={(e) => handleTemplateChange(e.target.value)}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-zinc-750 transition text-zinc-300"
             >
-              <option>字节跳动 - 核心业务线后端开发 (一面)</option>
-              <option>腾讯 - 平台与内容群系统架构 (二面)</option>
-              <option>阿里淘天 - 高并发交易链路重构 (终面)</option>
-              <option>美团 - 配送系统算法与架构调优 (资深开发)</option>
+              <option value="template1">求职开发（字节跳动 - 核心业务线后端开发一面）</option>
+              <option value="template2">学术保研（清华大学 - 计算机科学与技术夏令营学术面试）</option>
+              <option value="template3">前沿算法（微软亚洲研究院 - 自然语言处理方向研究员面试）</option>
+              <option value="custom">✍️ 自定义面试场景背景...</option>
             </select>
           </div>
 
@@ -198,10 +232,74 @@ export default function InterviewSetup({
           </div>
         </div>
 
+        {/* 自定义回答时限与轮次上限面板 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-[11px] uppercase tracking-wider text-zinc-400 mb-2 font-bold">
+              单题回答时限
+            </label>
+            <select
+              value={customLimit}
+              onChange={(e) => setCustomLimit(Number(e.target.value))}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-zinc-750 transition text-zinc-300"
+            >
+              <option value={60}>60秒</option>
+              <option value={120}>120秒</option>
+              <option value={180}>180秒</option>
+              <option value={300}>300秒</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] uppercase tracking-wider text-zinc-400 mb-2 font-bold">
+              交互轮数上限
+            </label>
+            <select
+              value={customRounds}
+              onChange={(e) => setCustomRounds(Number(e.target.value))}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-zinc-750 transition text-zinc-300"
+            >
+              <option value={3}>3 轮对答</option>
+              <option value={4}>4 轮对答</option>
+              <option value={5}>5 轮对答</option>
+              <option value={6}>6 轮对答</option>
+            </select>
+          </div>
+        </div>
+
+        {/* 💡 当选择自定义场景时展示二级表单 */}
+        {selectedTemplate === "custom" && (
+          <div className="p-5 bg-zinc-950/40 border border-zinc-800/80 rounded-xl space-y-4 animate-[fadeIn_0.3s_ease]">
+            <div className="text-xs font-bold text-zinc-300 border-b border-zinc-800/60 pb-2">✍️ 自定义您的面试靶标</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider text-zinc-500 mb-2 font-bold">公司 / 高校 / 学术机构名称</label>
+                <input
+                  type="text"
+                  value={customCompany}
+                  onChange={(e) => setCustomCompany(e.target.value)}
+                  placeholder="例如：北京大学、谷歌"
+                  className="w-full bg-zinc-950 border border-zinc-850 rounded px-3 py-2 text-xs focus:outline-none focus:border-zinc-700 text-zinc-300"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider text-zinc-500 mb-2 font-bold">申请岗位 / 考核研究方向</label>
+                <input
+                  type="text"
+                  value={customRole}
+                  onChange={(e) => setCustomRole(e.target.value)}
+                  placeholder="例如：智能系统夏令营、后端开发资深岗"
+                  className="w-full bg-zinc-950 border border-zinc-850 rounded px-3 py-2 text-xs focus:outline-none focus:border-zinc-700 text-zinc-300"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 硬件测试栏 */}
         <div className="bg-zinc-950/50 border border-zinc-800/80 rounded-xl p-5">
           <label className="block text-[11px] uppercase tracking-wider text-zinc-450 mb-3.5 font-bold">
-            本地设备接入配置（推荐开启，以获得完整音视频仿真对练体验）
+            本地设备接入配置（推荐开启，可进行音视频模拟对练）
           </label>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             
@@ -210,7 +308,7 @@ export default function InterviewSetup({
                 <Video size={16} className={hasCamera ? "text-emerald-500" : "text-zinc-500"} />
                 <div>
                   <div className="text-xs font-bold text-zinc-300">开启视频画面监控 (推荐)</div>
-                  <div className="text-[10px] text-zinc-500">平视镜头有助于调整面试仪态</div>
+                  <div className="text-[10px] text-zinc-500">平视镜头有助于在模拟中调整坐姿与仪态</div>
                 </div>
               </div>
               
@@ -234,7 +332,7 @@ export default function InterviewSetup({
                 <Mic size={16} className={hasMic ? "text-emerald-500" : "text-zinc-500"} />
                 <div>
                   <div className="text-xs font-bold text-zinc-300">开启麦克风语音输入 (推荐)</div>
-                  <div className="text-[10px] text-zinc-500">支持使用语音进行面试</div>
+                  <div className="text-[10px] text-zinc-500">支持直接使用语音说话的方式陈述解答</div>
                 </div>
               </div>
 
@@ -323,8 +421,7 @@ export default function InterviewSetup({
         {/* 开始按钮 */}
         <button
           type="button"
-          // 将当前的硬件选择偏好，在点击开始时向上传递
-          onClick={() => onStart(hasCamera, hasMic)}
+          onClick={() => onStart(hasCamera, hasMic, customLimit, customRounds)}
           className="w-full bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-bold py-4 rounded-lg transition duration-150 text-xs tracking-widest uppercase"
         >
           进入智能面试大厅
