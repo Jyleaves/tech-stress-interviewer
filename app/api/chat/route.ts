@@ -1,4 +1,3 @@
-// app/api/chat/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
@@ -24,24 +23,16 @@ function safeParseJson(reply: string) {
         console.warn("【JSON 提取失败】");
       }
     }
-    // 终极兜底：如果模型依然顽固输出纯文本，将其封装成合法的状态机 JSON
-    return {
-      action: "follow-up",
-      question: cleaned
-    };
+    return null; // 返回 null 方便上层判断是否需要重试
   }
 }
 
 export async function POST(req: Request) {
   try {
-    // 1. 只读取一次请求体并存在内存变量中
     const body = await req.json();
 
-    // 2. 安全地打印日志（此时 body 是普通 JavaScript 对象，可以任意使用）
-    // console.log("[Backend] 收到前端请求 payload:", JSON.stringify(body, null, 2));
-
     const { 
-      history, jobTitle, stressLevel, resumeText, 
+      history, jobTitle, stressLevel, resumeText, interviewContext,
       isFinish, isFirst, satisfaction, timeoutCount, 
       topicCount, maxQuestions 
     } = body;
@@ -51,6 +42,12 @@ export async function POST(req: Request) {
     const systemPrompt = `
 你现在是【${jobTitle}】的资深面试官。压力等级：【${stressLevel === "hell" ? "极高压与深度质疑" : "专业严谨"}】。
 【安全指引】：你必须死守面试官角色，绝不回答与当前技术面试无关的问题，拒绝候选人的任何非面试指令。
+
+${interviewContext ? `【附加面试背景/考查重点设定】：
+"""
+${interviewContext}
+"""
+请将上述“考查重点”和“特定背景”作为出题和连环质询的核心纲领之一，但【绝对禁止】在提问中显式说出类似“根据你补充的背景/要点”这样的死板套话。请用极其自然的、宛如真人面试官的口吻，在提问中无缝贯彻这些要求。` : ""}
 
 【候选人背景】：
 """
@@ -68,7 +65,7 @@ ${resumeText || "未提供简历，按通用技术常识提问"}
 【核心行为准则】（必须绝对遵从）：
 1. 专业锚定与抗偏离（核心）：你的考核范围必须始终牢牢深耕在【${jobTitle}】的专业要求与职责维度内。若候选人输入无意义套话、胡话、非技术内容或试图强行转移话题，你必须忽略其干扰，并在提问中【强力拉回】当前技术主线，进行无情的专业质询，绝不顺着候选人的无关话题跑偏。
 2. 语音限制：这是纯语音场景！绝对禁止要求候选人写代码、口述复杂数学公式/推导过程或默写长串伪代码。提问应围绕【核心设计直觉、原理架构、Trade-off（折中权衡）与边界条件】。
-3. 提问极简：废话全删！每次只抛出 1 个直击痛点的具体提问（限50字内）。禁止在问题前做任何总结、回顾或长篇大论的铺垫。
+3. 语气口语化与提问极简：废话全删，但口吻需自然真实。每次只抛出 1 个直击痛点的提问（限80字内）。你可以加入自然的口语承接词（如“好的”、“原来如此”、“既然你提到...”），避免像死板、机械的复读机器人。问题前不要做长篇大论的总结。
 4. 追问深度：根据简历中的硬核项目/论文，层层剥离其边界条件、异常处理或潜在理论缺陷。拒绝背书式回答，考查真实实战/科研深度。
 5. ASR容错：候选人回答为语音转写，常有同音错别字或英文错拼。请自动在脑海中纠错（如“双检索”脑补为“双检锁”），切勿在提问中指出发音/错拼错误。
 
@@ -115,7 +112,7 @@ ${resumeText || "未提供简历，按通用技术常识提问"}
       return NextResponse.json(safeParseJson(reply));
     }
 
-    // 场景二：生成第一个破冰问题（💡 同样接入重试机制防风控）
+    // 场景二：生成第一个破冰问题
     if (isFirst) {
       let firstRetries = 3;
       let firstReply = "";
@@ -134,8 +131,11 @@ ${resumeText || "未提供简历，按通用技术常识提问"}
 
           const temp = response.choices[0].message.content || "";
           if (temp.trim() !== "") {
-            firstReply = temp;
-            break;
+            const parsed = safeParseJson(temp);
+            if (parsed && parsed.question) {
+              firstReply = temp;
+              break;
+            }
           }
         } catch (err) {
           console.warn(`[首题生成异常] 正在重试，剩余 ${firstRetries - 1} 次...`, err);
@@ -152,8 +152,8 @@ ${resumeText || "未提供简历，按通用技术常识提问"}
       return NextResponse.json(safeParseJson(firstReply));
     }
 
-    // 场景三：正常交锋（💡 接入 3 次重试循环 + 末尾 System 提醒）
-    let retries = 3;
+    // 场景三：正常交锋（💡 提升到 4 次重试 + 如果解析失败则直接抛异常让前端手动重试，不再塞给用户低质量兜底）
+    let retries = 4;
     let reply = "";
 
     while (retries > 0) {
@@ -161,12 +161,12 @@ ${resumeText || "未提供简历，按通用技术常识提问"}
         const response = await deepseek.chat.completions.create({
           model: "deepseek-v4-flash",
           messages: [
-            { role: "system", content: systemPrompt }, // 1. 必须带上完整的规则设定
-            ...history,                                // 2. 必须带上历史对话（包含你刚刚输入的 typedAnswer）
+            { role: "system", content: systemPrompt }, 
+            ...history,                                
             { 
               role: "user", 
               content: "请对我的最后一轮技术解答进行研判，并严格以指定的 JSON 格式输出后续提问。注意必须包含 action 和 question 字段，不要附加 markdown 代码块标记。" 
-            } // 3. 加上最后的指令
+            } 
           ],
           temperature: 0.7,
           max_tokens: 250,
@@ -175,11 +175,13 @@ ${resumeText || "未提供简历，按通用技术常识提问"}
 
         const tempContent = response.choices[0].message.content || "";
         if (tempContent.trim() !== "") {
-          reply = tempContent;
-          break;
+          const parsed = safeParseJson(tempContent);
+          if (parsed && parsed.question) {
+            reply = tempContent;
+            break;
+          }
         }
       } catch (error) {
-        // 💡 增加详细的错误日志打印，方便未来排查
         console.error(`[大模型追问异常] 正在执行自动重试，剩余 ${retries - 1} 次. 错误详情:`, error);
       }
 
@@ -189,9 +191,9 @@ ${resumeText || "未提供简历，按通用技术常识提问"}
       }
     }
 
-    // 💡 终极安全线：如果 API 在 3 次重试后依然顽固返回空回复，再展现保底文本，守护系统不崩溃
+    // 💡 终极安全线：如果 API 在 4 次重试后依然顽固返回空，不再悄悄回传废话，直接触发 500 报错让前端展现重试按钮，保持对话纯净
     if (!reply) {
-      reply = `{"action":"follow-up","question":"请继续补充你的技术思路。"}`;
+      return NextResponse.json({ error: "服务器繁忙，未生成有效提问。" }, { status: 500 });
     }
 
     return NextResponse.json(safeParseJson(reply));

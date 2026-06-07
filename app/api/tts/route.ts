@@ -33,7 +33,7 @@ export async function POST(req: Request) {
 
     // 3. 加入带重试机制的 TTS 合成调用
     let result: { audio: Blob } | null = null;
-    let retries = 3; // 最大重试次数
+    let retries = 5; // 最大重试次数
     let lastError: unknown = null;
 
     while (retries > 0) {

@@ -22,7 +22,7 @@ export async function POST(req: Request) {
     const buffer = Buffer.from(arrayBuffer);
     const filePayload = await toFile(buffer, "answer.webm", { type: "audio/webm" });
 
-    // 💡 传入经过标准转换的文件负载 filePayload
+    // 传入经过标准转换的文件负载 filePayload
     const transcription = await openai.audio.transcriptions.create({
       file: filePayload,
       model: "TeleAI/TeleSpeechASR", // 如果想要高准确率方言普通话选星辰，如果想要极致速度选阿里 "FunAudioLLM/SenseVoiceSmall"

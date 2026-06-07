@@ -25,19 +25,21 @@ export default function Home() {
   
   // 面试前置配置字典
   const [jobTitle, setJobTitle] = useState("求职开发（字节跳动 - 核心业务线后端开发一面）");
-  const [stressLevel, setStressLevel] = useState("hell"); 
+  const [stressLevel, setStressLevel] = useState("normal"); 
   const [resumeText, setResumeText] = useState("");
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string; content: string }[]>([]);
-  const [maxQuestions, setMaxQuestions] = useState<number>(4);
-  const [initTimeLimit, setInitTimeLimit] = useState<number>(120);
+  const [maxQuestions, setMaxQuestions] = useState<number>(4); 
+  const [initTimeLimit, setInitTimeLimit] = useState<number>(300);
   const [useCamera, setUseCamera] = useState<boolean>(true);
   const [useMic, setUseMic] = useState<boolean>(true);
+
+  // 自定义面试背景与考查重点状态
+  const [interviewContext, setInterviewContext] = useState("");
 
   // 结案报告数据
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [reportData, setReportData] = useState<ReportData | null>(null);
 
-  // 当用户在 Setup 组件点击开始
   const handleStartInterview = (cameraPref: boolean, micPref: boolean, customLimit: number, customRounds: number) => {
     setUseCamera(cameraPref);
     setUseMic(micPref);
@@ -46,7 +48,6 @@ export default function Home() {
     setStep("interview");
   };
 
-  // 当 InterviewRoom 触发面试结束信号
   const handleInterviewFinish = async (
     reportDataFallback: unknown, 
     satisfaction: number, 
@@ -63,6 +64,7 @@ export default function Home() {
         body: JSON.stringify({
           history: finalHistory,
           jobTitle, stressLevel, satisfaction, timeoutCount,
+          interviewContext,
           isFinish: true 
         }),
       });
@@ -111,6 +113,7 @@ export default function Home() {
             stressLevel={stressLevel} setStressLevel={setStressLevel}
             resumeText={resumeText} setResumeText={setResumeText}
             uploadedFiles={uploadedFiles} setUploadedFiles={setUploadedFiles}
+            interviewContext={interviewContext} setInterviewContext={setInterviewContext}
             onStart={handleStartInterview}
           />
         )}
@@ -119,6 +122,7 @@ export default function Home() {
           <InterviewRoom
             jobTitle={jobTitle} stressLevel={stressLevel}
             resumeText={resumeText} uploadedFiles={uploadedFiles}
+            interviewContext={interviewContext}
             maxQuestions={maxQuestions} initTimeLimit={initTimeLimit}
             useCamera={useCamera} useMic={useMic}
             onFinish={handleInterviewFinish}
